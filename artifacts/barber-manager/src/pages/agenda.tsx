@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore, brl, ApptStatus } from '@/data/store';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/data/api';
@@ -399,7 +400,10 @@ export default function Agenda() {
                 </div>
                 {!blockForm.fullDay && (
                   <div>
-                    <label className="text-xs font-semibold text-muted-foreground uppercase">Horários</label>
+                      <div className="flex items-center gap-1">
+                        <label className="text-xs font-semibold text-muted-foreground uppercase">Horários</label>
+                        <FeatureInfo label="Selecionar horários">Use Ctrl no Windows ou Command no Mac para selecionar mais de um horário.</FeatureInfo>
+                      </div>
                     <div className="mt-2 grid max-h-48 grid-cols-3 gap-2 overflow-y-auto md:hidden">
                       {slots.map(slot => {
                         const selected = blockForm.slots.includes(slot);
@@ -429,7 +433,6 @@ export default function Agenda() {
                       <select multiple value={blockForm.slots} onChange={e => setBlockForm(f => ({ ...f, slots: Array.from(e.target.selectedOptions, o => o.value) }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm outline-none h-32">
                         {slots.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
-                      <p className="mt-1 text-xs text-muted-foreground">Use Ctrl ou Command para selecionar mais de um horário.</p>
                     </div>
                   </div>
                 )}
