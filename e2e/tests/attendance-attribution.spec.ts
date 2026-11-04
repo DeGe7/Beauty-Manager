@@ -1,5 +1,9 @@
 import { accounts, expect, loginAs, openModule, test, uniqueName } from '../fixtures';
 
+function uniquePhone(offset = 0) {
+  return `119${String(Date.now() + offset).slice(-8)}`;
+}
+
 test.describe('atribuição de vendas no Controle Diário', () => {
   test.beforeEach(async ({ page }) => {
     if (process.env.E2E_PROVISION !== 'true' || process.env.E2E_START_SERVER !== 'true') {
@@ -12,7 +16,7 @@ test.describe('atribuição de vendas no Controle Diário', () => {
   test('registra atendimento sem nome sem criar cliente ou visita', async ({ page }) => {
     await openModule(page, '/controle', 'Controle Diário');
     const form = page.locator('form').filter({
-      has: page.getByRole('button', { name: /^Salvar Atendimento/ }),
+      has: page.getByTestId('button-save-attendance'),
     });
     await form.getByTestId('checkbox-anonymous-attendance').check();
     await expect(form.getByTestId('input-attendance-client-name')).toHaveCount(0);
@@ -36,7 +40,7 @@ test.describe('atribuição de vendas no Controle Diário', () => {
       response.request().method() === 'POST' &&
       response.ok(),
     );
-    await form.getByRole('button', { name: /^Salvar Atendimento/ }).click();
+    await form.getByTestId('button-save-attendance').click();
     const appointmentResponse = await appointmentCreated;
     const appointment = await appointmentResponse.json() as {
       client: string;
@@ -51,10 +55,66 @@ test.describe('atribuição de vendas no Controle Diário', () => {
     await expect(page.getByRole('row').filter({ hasText: 'Atendimento sem identificação' })).toBeVisible();
   });
 
+  test('persiste a descrição livre separada da categoria de comissão', async ({ page }) => {
+    await openModule(page, '/controle', 'Controle Diário');
+    const form = page.locator('form').filter({
+      has: page.getByTestId('button-save-attendance'),
+    });
+    await form.getByTestId('checkbox-anonymous-attendance').check();
+    const professional = form.getByTestId('select-attendance-professional');
+    const professionalId = await professional.locator('option').nth(1).getAttribute('value');
+    expect(professionalId).toBeTruthy();
+    await professional.selectOption(professionalId!);
+    await form.getByTestId('select-attendance-service').selectOption({ label: 'Barbearia' });
+    await form.getByTestId('input-attendance-service-description').fill('Corte degradê e acabamento');
+    await form.getByTestId('input-attendance-service-value').fill('50');
+
+    const created = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/appointments') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-save-attendance').click();
+    const appointment = await (await created).json() as {
+      service: string;
+      service_id: string;
+      service_description: string;
+    };
+    expect(appointment.service).toBe('Barbearia');
+    expect(appointment.service_id).toBeTruthy();
+    expect(appointment.service_description).toBe('Corte degradê e acabamento');
+  });
+
+  test('não cria cliente nem atendimento identificado sem contato', async ({ page }) => {
+    await openModule(page, '/controle', 'Controle Diário');
+    const form = page.locator('form').filter({
+      has: page.getByTestId('button-save-attendance'),
+    });
+    const name = uniqueName('Cliente sem telefone');
+    await form.getByTestId('input-attendance-client-name').fill(name);
+    const professional = form.getByTestId('select-attendance-professional');
+    const professionalId = await professional.locator('option').nth(1).getAttribute('value');
+    expect(professionalId).toBeTruthy();
+    await professional.selectOption(professionalId!);
+    await form.getByTestId('input-attendance-service-value').fill('50');
+
+    let clientCreates = 0;
+    let appointmentCreates = 0;
+    page.on('request', request => {
+      if (request.method() !== 'POST') return;
+      if (request.url().includes('/rest/v1/rpc/create_or_get_client_by_phone')) clientCreates += 1;
+      if (request.url().includes('/rest/v1/appointments')) appointmentCreates += 1;
+    });
+    await form.getByTestId('button-save-attendance').click();
+    await expect(page.getByText('Informe o telefone para criar o cadastro.', { exact: false })).toBeVisible();
+    expect(clientCreates).toBe(0);
+    expect(appointmentCreates).toBe(0);
+  });
+
   test('salva atribuições distintas, venda própria e serviço comum sem atribuição', async ({ page }) => {
     await openModule(page, '/controle', 'Controle Diário');
     const form = page.locator('form').filter({
-      has: page.getByRole('button', { name: /^Salvar Atendimento/ }),
+      has: page.getByTestId('button-save-attendance'),
     });
     const executor = form.getByTestId('select-attendance-professional');
     const professionals = await executor.locator('option').evaluateAll(options =>
@@ -66,12 +126,12 @@ test.describe('atribuição de vendas no Controle Diário', () => {
 
     const saved: Array<{ client: string; sellerId: string | null; company: boolean }> = [];
     const cases = [
-      { service: 'Prótese Capilar', sellerId: professionals[1], company: false },
+      { service: 'Mentoria', sellerId: professionals[1], company: false },
       { service: 'Mentoria', sellerId: 'company', company: true },
       { service: 'Barbearia', sellerId: null, company: false },
     ];
 
-    for (const scenario of cases) {
+    for (const [scenarioIndex, scenario] of cases.entries()) {
       const client = uniqueName(`Cliente ${scenario.service}`);
       await form.getByTestId('input-attendance-client-name').fill(client);
       await form.getByTestId('select-attendance-service').selectOption({ label: scenario.service });
@@ -83,13 +143,15 @@ test.describe('atribuição de vendas no Controle Diário', () => {
         await form.getByTestId('select-attendance-seller').selectOption(scenario.sellerId!);
       }
       await form.getByTestId('input-attendance-service-value').fill('100');
+      const phone = uniquePhone(scenarioIndex);
+      await form.getByTestId('input-attendance-client-phone').fill(phone);
+      await expect(form.getByTestId('input-attendance-client-phone')).toHaveValue(phone);
 
       const created = page.waitForResponse(response =>
         response.url().includes('/rest/v1/appointments') &&
-        response.request().method() === 'POST' &&
-        response.ok(),
+        response.request().method() === 'POST',
       );
-      await form.getByRole('button', { name: /^Salvar Atendimento/ }).click();
+      await form.getByTestId('button-save-attendance').click();
       const response = await created;
       const row = await response.json() as {
         seller_professional_id: string | null;
@@ -127,7 +189,7 @@ test.describe('atribuição de vendas no Controle Diário', () => {
   test('permite atribuir vários profissionais com comissão manual individual', async ({ page }) => {
     await openModule(page, '/controle', 'Controle Diário');
     const form = page.locator('form').filter({
-      has: page.getByRole('button', { name: /^Salvar Atendimento/ }),
+      has: page.getByTestId('button-save-attendance'),
     });
     const primarySelect = form.getByTestId('select-attendance-professional');
     const professionals = await primarySelect.locator('option').evaluateAll(options =>
@@ -141,24 +203,28 @@ test.describe('atribuição de vendas no Controle Diário', () => {
     const secondId = professionals[1];
     await form.getByTestId('input-attendance-client-name').fill(uniqueName('Cliente comissão manual'));
     await form.getByTestId('select-attendance-service').selectOption({ label: 'Barbearia' });
+    await form.getByTestId('input-attendance-service-value').fill('100');
+    const phone = uniquePhone(20);
+    await form.getByTestId('input-attendance-client-phone').fill(phone);
+    await expect(form.getByTestId('input-attendance-client-phone')).toHaveValue(phone);
     await primarySelect.selectOption(primaryId);
     await form.getByRole('button', { name: '+ Adicionar outro profissional' }).click();
     await form.getByTestId('select-attendance-additional-professional-0').selectOption(secondId);
     await expect(form.getByTestId('attendance-manual-commissions')).toBeVisible();
     await form.getByTestId(`input-attendance-manual-commission-${primaryId}`).fill('18.50');
     await form.getByTestId(`input-attendance-manual-commission-${secondId}`).fill('12');
-    await form.getByTestId('input-attendance-service-value').fill('100');
     await expect(form.getByTestId('attendance-manual-commission-balance')).toContainText('Faltam');
     await form.getByTestId(`input-attendance-manual-commission-${secondId}`).fill('31.50');
     await expect(form.getByTestId('attendance-manual-commission-balance')).toContainText('Divisão completa');
 
     const created = page.waitForResponse(response =>
       response.url().includes('/rest/v1/appointments') &&
-      response.request().method() === 'POST' &&
-      response.ok(),
+      response.request().method() === 'POST',
     );
-    await form.getByRole('button', { name: /^Salvar Atendimento/ }).click();
-    const row = await (await created).json() as {
+    await form.getByTestId('button-save-attendance').click();
+    const response = await created;
+    expect(response.ok(), `appointment insert returned ${response.status()}`).toBe(true);
+    const row = await response.json() as {
       professional_id: string;
       professional_commissions: Array<{ professionalId: string; amount: number }>;
       value: number;
@@ -181,7 +247,7 @@ test.describe('atribuição de vendas no Controle Diário', () => {
       await loginAs(page, accounts.operational);
       await openModule(page, '/controle', 'Controle Diário');
       const form = page.locator('form').filter({
-        has: page.getByRole('button', { name: /^Salvar Atendimento/ }),
+        has: page.getByTestId('button-save-attendance'),
       });
       const executor = form.getByTestId('select-attendance-professional');
       await expect(executor).toBeDisabled();
@@ -193,13 +259,15 @@ test.describe('atribuição de vendas no Controle Diário', () => {
       await form.getByTestId('select-attendance-service').selectOption({ label: 'Mentoria' });
       await form.getByTestId('select-attendance-seller').selectOption('company');
       await form.getByTestId('input-attendance-service-value').fill('100');
+      const phone = uniquePhone(30);
+      await form.getByTestId('input-attendance-client-phone').fill(phone);
+      await expect(form.getByTestId('input-attendance-client-phone')).toHaveValue(phone);
 
       const created = page.waitForResponse(response =>
         response.url().includes('/rest/v1/appointments') &&
-        response.request().method() === 'POST' &&
-        response.ok(),
+        response.request().method() === 'POST',
       );
-      await form.getByRole('button', { name: /^Salvar Atendimento/ }).click();
+      await form.getByTestId('button-save-attendance').click();
       const response = await created;
       const row = await response.json() as {
         professional_id: string;
@@ -210,7 +278,7 @@ test.describe('atribuição de vendas no Controle Diário', () => {
       expect(row.seller_professional_id).toBeNull();
       expect(row.seller_is_company).toBe(true);
     } finally {
-      await page.close();
+      if (!page.isClosed()) await page.close().catch(() => undefined);
     }
   });
 });
