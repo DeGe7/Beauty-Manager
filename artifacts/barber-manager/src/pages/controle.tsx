@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useStore, brl, productStatus, EXPENSE_CATEGORIES, PAY_LABELS, ExpenseCategory, PayMethod, PaymentSplit, ProfessionalCommissions } from '@/data/store';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Plus, Trash2, ArrowUpRight, ArrowDownRight, AlertTriangle } from 'lucide-react';
@@ -10,12 +11,23 @@ import { canDeleteAttendance } from '@/data/attendance-deletion';
 import { api } from '@/data/api';
 import { normalizeClientPhone } from '@/data/client-phone';
 import { isAssignableProfessional } from '@/data/professional-selection';
-import { planServiceBenefits, planValuePerUse, subscriberServiceUsesRemaining } from '@/data/plan-usage';
+import {
+  planProfessionalAmountForUse,
+  planProfessionalPoolAmount,
+  planSalonAmountForUse,
+  planSalonShareAmount,
+  planServiceBenefits,
+  planValuePerUse,
+  subscriberPlanUsageCount,
+  subscriberServiceUsesRemaining,
+  totalPlanIncludedUses,
+} from '@/data/plan-usage';
 import {
   appointmentProductsChargeTotal,
   clampManualCommissionAmount,
   manualCommissionAmountLimit,
   manualCommissionAllocationMatches,
+  manualCommissionAllocationMatchesTarget,
   automaticProsthesisProductId,
   professionalCommissionPool,
   prosthesisCommissionForProfessional,
@@ -34,6 +46,13 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 
+function normalizeClientSearchText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLocaleLowerCase('pt-BR');
+}
+
 export default function Controle() {
   const { 
     professionals, products, appointments, expenses, config, plans, subscribers, subscriptionPayments,
@@ -49,13 +68,15 @@ export default function Controle() {
   const activeProfs = professionals.filter(p => p.isActive && isAssignableProfessional(p));
 
   // Form states
-  const [clientSearch, setClientSearch] = useState('');
+  const [clientLookupField, setClientLookupField] = useState<'name' | 'phone' | null>(null);
+  const [activeClientIndex, setActiveClientIndex] = useState(-1);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [client, setClient] = useState('');
   const [clientPhone, setClientPhone] = useState('');
   const [clientBirthday, setClientBirthday] = useState('');
   const [anonymousAttendance, setAnonymousAttendance] = useState(false);
   const [service, setService] = useState('Barbearia');
+  const [serviceDescription, setServiceDescription] = useState('Barbearia');
   const [serviceId, setServiceId] = useState('');
   const [planSubscriberId, setPlanSubscriberId] = useState('');
   const [showAssignPlan, setShowAssignPlan] = useState(false);
@@ -77,6 +98,26 @@ export default function Controle() {
     isAutoAssigned?: boolean;
   }[]>([]);
   const [paymentSplits, setPaymentSplits] = useState<PaymentSplit[]>([]);
+  const pendingAttendanceFocus = useRef<{
+    kind: 'product' | 'additional-professional' | 'payment';
+    index: number;
+  } | null>(null);
+  const productSelectRefs = useRef<(HTMLSelectElement | null)[]>([]);
+  const additionalProfessionalSelectRefs = useRef<(HTMLSelectElement | null)[]>([]);
+  const paymentMethodSelectRefs = useRef<(HTMLSelectElement | null)[]>([]);
+
+  useEffect(() => {
+    const pendingFocus = pendingAttendanceFocus.current;
+    if (!pendingFocus) return;
+
+    const target = pendingFocus.kind === 'product'
+      ? productSelectRefs.current[pendingFocus.index]
+      : pendingFocus.kind === 'additional-professional'
+        ? additionalProfessionalSelectRefs.current[pendingFocus.index]
+        : paymentMethodSelectRefs.current[pendingFocus.index];
+    pendingAttendanceFocus.current = null;
+    target?.focus();
+  }, [apptProducts.length, additionalProfessionalIds.length, paymentSplits.length]);
 
   // Expense form
   const [expDate, setExpDate] = useState(today);
@@ -114,6 +155,10 @@ export default function Controle() {
   const selectedClient = clients.find(item => item.id === selectedClientId);
   const selectedPlanSubscriber = subscribers.find(item => item.id === planSubscriberId);
   const selectedPlan = plans.find(item => item.id === selectedPlanSubscriber?.planId);
+  const planSalonSharePercentForUsage = selectedPlanSubscriber?.salonSharePercentSnapshot ?? null;
+  const selectedPlanForUsage = selectedPlan
+    ? { ...selectedPlan, salonSharePercent: planSalonSharePercentForUsage }
+    : undefined;
   const planBenefits = planServiceBenefits(selectedPlan);
   const serviceItem = config.services.find(s => s.id === serviceId && (s.isActive || Boolean(selectedPlanSubscriber)))
     ?? config.services.find(s => s.name === service && s.isActive)
@@ -128,14 +173,37 @@ export default function Controle() {
   const selectedPlanBenefit = planBenefits.find(benefit => benefit.serviceId === serviceId);
   const isPlanMode = Boolean(selectedPlanSubscriber);
   const isPlanAttendance = Boolean(isPlanMode && selectedPlanBenefit);
-  const planValueForUse = isPlanAttendance ? planValuePerUse(selectedPlan) : 0;
+  const usesConfiguredPlanSplit = Boolean(isPlanAttendance && planSalonSharePercentForUsage != null);
+  const planUseOrdinal = isPlanAttendance && selectedPlanSubscriber
+    ? subscriberPlanUsageCount(appointments, selectedPlanSubscriber) + 1
+    : 1;
+  const planTotalUses = totalPlanIncludedUses(selectedPlan);
+  const configuredPlanSalonValue = isPlanAttendance
+    ? planSalonAmountForUse(selectedPlanForUsage, planUseOrdinal)
+    : null;
+  const configuredPlanProfessionalValue = isPlanAttendance
+    ? planProfessionalAmountForUse(selectedPlanForUsage, planUseOrdinal)
+    : null;
+  const planSalonValueForUse = usesConfiguredPlanSplit ? configuredPlanSalonValue ?? 0 : 0;
+  const planGrossValueForUse = isPlanAttendance
+    ? usesConfiguredPlanSplit
+      ? planSalonValueForUse + (configuredPlanProfessionalValue ?? 0)
+      : planValuePerUse(selectedPlan)
+    : 0;
+  const planValueForUse = isPlanAttendance
+    ? configuredPlanProfessionalValue ?? planGrossValueForUse
+    : 0;
   const serviceKey = (serviceItem?.commissionKey ?? 'barbearia') as keyof ProfessionalCommissions;
   const isSalesAttributedService = serviceItem?.commissionKey === 'protese' || serviceItem?.commissionKey === 'mentoria';
   const sellerCommRate = selectedSeller?.commissions[serviceKey] || 0;
   const serviceValue = isPlanMode ? 0 : parseFloat(value) || 0;
-  const commissionBaseValue = isPlanAttendance ? planValueForUse : serviceValue;
+  const commissionBaseValue = isPlanAttendance
+    ? usesConfiguredPlanSplit ? planValueForUse : planGrossValueForUse
+    : serviceValue;
   const commissionBasisDescription = isPlanAttendance
-    ? 'do valor rateado deste uso do plano'
+    ? usesConfiguredPlanSplit
+      ? 'da parte profissional deste uso do plano'
+      : 'do valor rateado deste uso do plano'
     : 'do valor bruto do serviço';
   const prosthesisCost = prosthesisProductCost(apptProducts, products);
   useEffect(() => {
@@ -184,16 +252,20 @@ export default function Controle() {
   ) * 100) / 100;
   const manualCommissionTarget = isProsthesisApplication
     ? manualCommissionTotal
-    : professionalCommissionPool(commissionBaseValue);
+    : usesConfiguredPlanSplit
+      ? planValueForUse
+      : professionalCommissionPool(commissionBaseValue);
   const calculatedComm = isManualCommissionMode
     ? manualCommissionTotal
     : isProsthesisApplication && selectedProf
       ? prosthesisCommissionForProfessional(serviceValue, prosthesisCost, selectedProf.name)
+      : usesConfiguredPlanSplit
+        ? planValueForUse
       : manualCommissionTarget;
-  const manualCommissionIsBalanced = isProsthesisApplication || manualCommissionAllocationMatches(
-    commissionBaseValue,
-    manualAssignments,
-  );
+  const manualCommissionIsBalanced = isProsthesisApplication
+    || (usesConfiguredPlanSplit
+      ? manualCommissionAllocationMatchesTarget(manualCommissionTarget, manualAssignments)
+      : manualCommissionAllocationMatches(commissionBaseValue, manualAssignments));
   const manualCommissionLimitFor = (professionalId: string) => manualCommissionAmountLimit(
     manualCommissionTarget,
     assignedProfessionalIds
@@ -240,13 +312,19 @@ export default function Controle() {
   const isDuplicateClientPhone = !selectedClientId && normalizedClientPhone.length > 0 && clients.some(
     item => normalizeClientPhone(item.whatsapp) === normalizedClientPhone,
   );
-  const searchText = clientSearch.trim().toLocaleLowerCase('pt-BR');
-  const searchPhone = normalizeClientPhone(clientSearch);
-  const matchingClients = searchText
+  const clientNameQuery = normalizeClientSearchText(client.trim());
+  const clientPhoneQuery = normalizeClientPhone(clientPhone);
+  const canSearchClients = clientLookupField === 'name'
+    ? clientNameQuery.length >= 2
+    : clientLookupField === 'phone'
+      ? clientPhoneQuery.length >= 4
+      : false;
+  const matchingClients = canSearchClients
     ? clients
         .filter(item =>
-          item.name.toLocaleLowerCase('pt-BR').includes(searchText)
-          || (searchPhone.length > 0 && normalizeClientPhone(item.whatsapp).includes(searchPhone)),
+          clientLookupField === 'name'
+            ? normalizeClientSearchText(item.name).includes(clientNameQuery)
+            : normalizeClientPhone(item.whatsapp).includes(clientPhoneQuery),
         )
         .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
         .slice(0, 8)
@@ -260,7 +338,42 @@ export default function Controle() {
     setPlanSubscriberId('');
     setShowAssignPlan(false);
     setConfirmPlanPayment(false);
-    setClientSearch('');
+    setClientLookupField(null);
+    setActiveClientIndex(-1);
+  };
+
+  const handleClientLookupKeyDown = (
+    field: 'name' | 'phone',
+    event: KeyboardEvent<HTMLInputElement>,
+  ) => {
+    const isLookupOpen = clientLookupField === field && canSearchClients && !selectedClientId;
+    if (event.key === 'Escape' && clientLookupField === field) {
+      event.preventDefault();
+      setClientLookupField(null);
+      setActiveClientIndex(-1);
+      return;
+    }
+
+    if (!isLookupOpen || matchingClients.length === 0) return;
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveClientIndex(current => {
+        if (event.key === 'ArrowDown') {
+          return current < 0 ? 0 : (current + 1) % matchingClients.length;
+        }
+        return current < 0
+          ? matchingClients.length - 1
+          : (current - 1 + matchingClients.length) % matchingClients.length;
+      });
+      return;
+    }
+
+    if (event.key === 'Enter' && activeClientIndex >= 0) {
+      event.preventDefault();
+      const activeClient = matchingClients[activeClientIndex];
+      if (activeClient) selectClient(activeClient);
+    }
   };
 
   const clearSelectedClient = () => {
@@ -271,10 +384,56 @@ export default function Controle() {
     setClient('');
     setClientPhone('');
     setClientBirthday('');
-    setClientSearch('');
+    setClientLookupField(null);
+    setActiveClientIndex(-1);
   };
 
-  const handleAddProduct = () => setApptProducts([...apptProducts, { productId: '', quantity: 1 }]);
+  const renderClientLookupResults = (field: 'name' | 'phone') => {
+    if (
+      clientLookupField !== field
+      || !canSearchClients
+      || selectedClientId
+    ) return null;
+
+    return (
+      <div
+        id={`attendance-client-results-${field}`}
+        data-testid={`attendance-client-results-${field}`}
+        role="listbox"
+        className="mt-1 overflow-hidden rounded-lg border border-brand-border bg-brand-bg"
+      >
+        {matchingClients.length > 0 ? matchingClients.map(item => (
+          <button
+            key={item.id}
+            id={`attendance-client-option-${field}-${item.id}`}
+            type="button"
+            role="option"
+            aria-selected={matchingClients[activeClientIndex]?.id === item.id}
+            tabIndex={-1}
+            data-testid={`button-select-attendance-client-${item.id}`}
+            onClick={() => selectClient(item)}
+            className={`flex w-full items-center justify-between gap-3 border-b border-brand-border px-4 py-2 text-left last:border-b-0 hover:bg-brand-surface ${
+              matchingClients[activeClientIndex]?.id === item.id
+                ? 'bg-brand-surface ring-2 ring-inset ring-brand-gold'
+                : ''
+            }`}
+          >
+            <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{item.whatsapp || 'Sem telefone'}</span>
+          </button>
+        )) : (
+          <p role="status" className="px-4 py-3 text-sm text-muted-foreground">
+            Nenhum cliente encontrado. Continue com os dados informados para cadastrar.
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  const handleAddProduct = () => {
+    pendingAttendanceFocus.current = { kind: 'product', index: apptProducts.length };
+    setApptProducts(current => [...current, { productId: '', quantity: 1 }]);
+  };
   const updateApptProduct = (index: number, field: 'productId' | 'quantity', val: any) => {
     const newP = [...apptProducts];
     newP[index] = {
@@ -332,7 +491,7 @@ export default function Controle() {
         setSelectedClientId(savedClient.id);
         setClient(savedClient.name);
         setClientPhone(savedClient.whatsapp);
-        setClientSearch('');
+        setClientLookupField(null);
       }
 
       const existingSubscriber = matchedPlanSubscribers.find(item =>
@@ -346,6 +505,7 @@ export default function Controle() {
         if (includedService) {
           setServiceId(includedService.id);
           setService(includedService.name);
+          setServiceDescription(includedService.name);
         }
         setValue('0');
         toast.success('Este cliente já tem esse plano ativo; selecionado para o atendimento.');
@@ -396,6 +556,7 @@ export default function Controle() {
       if (includedService) {
         setServiceId(includedService.id);
         setService(includedService.name);
+        setServiceDescription(includedService.name);
       }
       setValue('0');
       toast.success('Plano atribuído e mensalidade confirmada. O uso será descontado ao salvar o atendimento.');
@@ -444,6 +605,16 @@ export default function Controle() {
       return;
     }
 
+    if (
+      !anonymousAttendance
+      && selectedClient
+      && !selectedClient.whatsapp.trim()
+      && !selectedClient.email.trim()
+    ) {
+      toast.error('Este cadastro não tem telefone ou e-mail. Atualize-o em Clientes antes de lançar o atendimento.');
+      return;
+    }
+
     if (anonymousAttendance && planSubscriberId) {
       toast.error('Atendimentos sem identificação não podem usar plano.');
       return;
@@ -463,7 +634,12 @@ export default function Controle() {
       }
     }
 
-    if (!anonymousAttendance && !selectedClient && clientPhone.trim() && normalizedClientPhone.length < 10 && !isDuplicateClientPhone) {
+    if (!anonymousAttendance && !selectedClient && !normalizedClientPhone) {
+      toast.error('Informe o telefone para criar o cadastro. Se tiver apenas e-mail, cadastre o cliente em Clientes e selecione-o aqui.');
+      return;
+    }
+
+    if (!anonymousAttendance && !selectedClient && normalizedClientPhone.length < 10 && !isDuplicateClientPhone) {
       toast.error('Informe o telefone com DDD para cadastrar o cliente.');
       return;
     }
@@ -472,8 +648,8 @@ export default function Controle() {
       const difference = Math.round((manualCommissionTarget - manualCommissionTotal + Number.EPSILON) * 100) / 100;
       toast.error(
         difference > 0
-          ? `As comissões devem somar ${brl(manualCommissionTarget)} (50% ${commissionBasisDescription}); ainda faltam ${brl(difference)}.`
-          : `As comissões devem somar ${brl(manualCommissionTarget)} (50% ${commissionBasisDescription}); reduza ${brl(Math.abs(difference))}.`,
+          ? `As comissões devem somar ${brl(manualCommissionTarget)} ${commissionBasisDescription}; ainda faltam ${brl(difference)}.`
+          : `As comissões devem somar ${brl(manualCommissionTarget)} ${commissionBasisDescription}; reduza ${brl(Math.abs(difference))}.`,
       );
       return;
     }
@@ -536,12 +712,13 @@ export default function Controle() {
     let clientRecord: Awaited<ReturnType<typeof addClient>> = null;
     let selectedVisitId: string | null = null;
     let linkedClientId = anonymousAttendance ? undefined : selectedClient?.id;
-    let clientSaveFailed = false;
     if (!anonymousAttendance && selectedClient) {
       const savedVisit = await addVisit(selectedClient.id, {
         date: today,
         type: 'servico',
-        description: isPlanAttendance ? `${service} · Plano ${selectedPlan?.name}` : service,
+        description: isPlanAttendance
+          ? `${serviceDescription.trim() || service} · Plano ${selectedPlan?.name}`
+          : serviceDescription.trim() || service,
         professional: assignedProfessionalNames.join(', '),
         amount: valNum,
       });
@@ -562,16 +739,20 @@ export default function Controle() {
       }, {
         date: today,
         type: 'servico',
-        description: isPlanAttendance ? `${service} · Plano ${selectedPlan?.name}` : service,
+        description: isPlanAttendance
+          ? `${serviceDescription.trim() || service} · Plano ${selectedPlan?.name}`
+          : serviceDescription.trim() || service,
         professional: assignedProfessionalNames.join(', '),
         amount: valNum,
       }, { notifyOnError: false });
       if (!clientRecord) {
-        clientSaveFailed = true;
-      } else {
-        selectedVisitId = clientRecord.initialVisitId ?? null;
-        linkedClientId = clientRecord.id;
+        const restored = await restoreDeductedStock();
+        toast.error('Atendimento não registrado: não foi possível salvar o cliente em Clientes.');
+        if (!restored) toast.warning('Confira o estoque: nem todos os produtos puderam ser repostos.');
+        return;
       }
+      selectedVisitId = clientRecord.initialVisitId ?? null;
+      linkedClientId = clientRecord.id;
     }
 
     const createdAppointment = await addAppointment({
@@ -594,6 +775,7 @@ export default function Controle() {
           }
         : {}),
       service,
+       serviceDescription: serviceDescription.trim() || service,
       duration,
       status: 'completed',
       completedAt: currentTime,
@@ -623,8 +805,6 @@ export default function Controle() {
 
     if (anonymousAttendance) {
       toast.success('Atendimento sem cliente identificado registrado.');
-    } else if (clientSaveFailed) {
-      toast.warning('Atendimento registrado, mas o cliente não foi salvo. Cadastre-o depois pelo módulo Clientes.');
     } else {
       toast.success(clientRecord && !clientRecord.wasCreated
         ? 'Atendimento registrado e vinculado ao cliente existente.'
@@ -645,8 +825,14 @@ export default function Controle() {
         description: error instanceof Error ? error.message : 'Tente sincronizar novamente pela agenda.',
       });
     });
-    setSelectedClientId(''); setClientSearch(''); setClient(''); setClientPhone(''); setClientBirthday(''); setAnonymousAttendance(false);
+    setSelectedClientId('');
+    setClientLookupField(null);
+    setClient('');
+    setClientPhone('');
+    setClientBirthday('');
+    setAnonymousAttendance(false);
     setPlanSubscriberId(''); setServiceId('');
+    setServiceDescription(serviceItem.name);
     setValue(''); setTip(''); setNotes(''); setApptProducts([]); setPaymentSplits([]); setSellerProfessionalId('');
     setAdditionalProfessionalIds([]); setManualCommissionAmounts({});
   };
@@ -850,15 +1036,19 @@ export default function Controle() {
         <div className="bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6">
           <div className="mb-5 flex items-start justify-between gap-3 border-b border-brand-border/70 pb-4">
             <div>
-              <h3 className="text-lg font-bold text-foreground">Registrar Atendimento</h3>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Cliente ou atendimento sem identificação, serviço e pagamento em um único lançamento.</p>
+              <div className="flex items-center gap-1">
+                <h3 className="text-lg font-bold text-foreground">Registrar Atendimento</h3>
+                <FeatureInfo label="Registrar atendimento">Registre um serviço identificado ou sem nome, com profissionais, produtos e pagamento em um único lançamento.</FeatureInfo>
+              </div>
             </div>
             <span className="shrink-0 rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-brand-gold">Novo</span>
           </div>
           <form onSubmit={handleRegisterAppt} className="space-y-4 [&_input:not([type=checkbox]):not([type=radio])]:min-h-11 [&_select]:min-h-11">
             <div className="border-b border-brand-border/70 pb-2">
-              <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">1. Cliente</h4>
-              <p className="mt-1 text-xs text-muted-foreground">Busque um cadastro, informe os dados ou marque sem identificação.</p>
+              <div className="flex items-center gap-1">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">1. Cliente</h4>
+                <FeatureInfo label="Identificar cliente">Digite nome ou telefone para localizar e vincular um cadastro. Para registrar sem dados do cliente, marque “Registrar sem nome do cliente”; planos não ficam disponíveis nesse modo.</FeatureInfo>
+              </div>
             </div>
             <label htmlFor="attendance-anonymous" className="flex cursor-pointer items-start gap-3 rounded-xl border border-brand-border bg-brand-bg p-3">
               <input
@@ -874,7 +1064,7 @@ export default function Controle() {
                     setPlanSubscriberId('');
                     setShowAssignPlan(false);
                     setConfirmPlanPayment(false);
-                    setClientSearch('');
+                    setClientLookupField(null);
                     setClient('');
                     setClientPhone('');
                     setClientBirthday('');
@@ -884,7 +1074,6 @@ export default function Controle() {
               />
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-foreground">Registrar sem nome do cliente</span>
-                <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">Não cria cadastro nem histórico de visita. Planos ficam indisponíveis.</span>
               </span>
             </label>
             {anonymousAttendance ? (
@@ -893,65 +1082,32 @@ export default function Controle() {
               </div>
             ) : (
               <>
-            <div>
-              <label htmlFor="attendance-client-search" className="text-xs font-semibold text-foreground uppercase tracking-wide">Buscar cliente cadastrado</label>
-              {selectedClient || selectedClientId ? (
-                <div className="mt-1 flex items-center justify-between gap-3 rounded-lg border border-brand-gold/50 bg-brand-bg px-4 py-2">
-                  <div className="min-w-0">
-                    {selectedClient ? (
-                      <>
-                        <p className="truncate text-sm font-semibold text-foreground">{selectedClient.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{selectedClient.whatsapp || 'Sem telefone cadastrado'}</p>
-                      </>
-                    ) : (
-                      <p className="text-sm text-destructive">Este cadastro não está mais disponível. Escolha outro cliente.</p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    data-testid="button-clear-attendance-client"
-                    onClick={clearSelectedClient}
-                    className="shrink-0 text-xs font-semibold text-brand-gold hover:underline"
-                  >
-                    Trocar cliente
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <input
-                    id="attendance-client-search"
-                    data-testid="input-attendance-client-search"
-                    type="search"
-                    autoComplete="off"
-                    value={clientSearch}
-                    onChange={e => setClientSearch(e.target.value)}
-                    className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold focus:border-brand-gold outline-none transition-all"
-                    placeholder="Pesquise por nome ou telefone"
-                    aria-controls="attendance-client-results"
-                  />
-                  {searchText && (
-                    <div id="attendance-client-results" className="mt-1 overflow-hidden rounded-lg border border-brand-border bg-brand-bg">
-                      {matchingClients.length > 0 ? matchingClients.map(item => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          data-testid={`button-select-attendance-client-${item.id}`}
-                          onClick={() => selectClient(item)}
-                          className="flex w-full items-center justify-between gap-3 border-b border-brand-border px-4 py-2 text-left last:border-b-0 hover:bg-brand-surface"
-                        >
-                          <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
-                          <span className="shrink-0 text-xs text-muted-foreground">{item.whatsapp || 'Sem telefone'}</span>
-                        </button>
-                      )) : (
-                        <p className="px-4 py-3 text-sm text-muted-foreground">
-                          Nenhum cliente encontrado. Preencha os dados abaixo para registrar manualmente.
-                        </p>
-                      )}
-                    </div>
+            {selectedClient || selectedClientId ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-brand-gold/50 bg-brand-bg px-4 py-2">
+                <div className="min-w-0">
+                  {selectedClient ? (
+                    <>
+                      <p className="truncate text-sm font-semibold text-foreground">{selectedClient.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {selectedClient.whatsapp || selectedClient.email || 'Sem telefone ou e-mail cadastrado'}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-destructive">Este cadastro não está mais disponível. Escolha outro cliente.</p>
                   )}
-                </>
-              )}
-              <label htmlFor="attendance-client-name" className="mt-3 block text-xs font-semibold text-foreground uppercase tracking-wide">Nome do cliente *</label>
+                </div>
+                <button
+                  type="button"
+                  data-testid="button-clear-attendance-client"
+                  onClick={clearSelectedClient}
+                  className="shrink-0 text-xs font-semibold text-brand-gold hover:underline"
+                >
+                  Trocar cliente
+                </button>
+              </div>
+            ) : null}
+            <div>
+              <label htmlFor="attendance-client-name" className="block text-xs font-semibold text-foreground uppercase tracking-wide">Nome do cliente *</label>
               <input
                 id="attendance-client-name"
                 data-testid="input-attendance-client-name"
@@ -959,10 +1115,27 @@ export default function Controle() {
                 required
                 readOnly={Boolean(selectedClient)}
                 value={client}
-                onChange={e => { setSelectedClientId(''); setPlanSubscriberId(''); setClient(e.target.value); }}
+                onChange={e => {
+                  setSelectedClientId('');
+                  setPlanSubscriberId('');
+                  setClient(e.target.value);
+                  setClientLookupField('name');
+                  setActiveClientIndex(-1);
+                }}
+                onKeyDown={event => handleClientLookupKeyDown('name', event)}
                 className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold focus:border-brand-gold outline-none transition-all read-only:opacity-70"
-                placeholder="Nome e Sobrenome do cliente"
+                placeholder="Digite o nome para localizar ou cadastrar"
+                autoComplete="off"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-haspopup="listbox"
+                aria-expanded={clientLookupField === 'name' && canSearchClients && !selectedClientId}
+                aria-controls="attendance-client-results-name"
+                aria-activedescendant={clientLookupField === 'name' && matchingClients[activeClientIndex]
+                  ? `attendance-client-option-name-${matchingClients[activeClientIndex].id}`
+                  : undefined}
               />
+              {renderClientLookupResults('name')}
             </div>
             <div>
               <label htmlFor="attendance-client-phone" className="text-xs font-semibold text-foreground uppercase tracking-wide">Telefone do Cliente</label>
@@ -974,23 +1147,39 @@ export default function Controle() {
                 autoComplete="tel"
                 readOnly={Boolean(selectedClient)}
                 value={clientPhone}
-                onChange={e => { setSelectedClientId(''); setPlanSubscriberId(''); setClientPhone(e.target.value); }}
+                onChange={e => {
+                  setSelectedClientId('');
+                  setPlanSubscriberId('');
+                  setClientPhone(e.target.value);
+                  setClientLookupField('phone');
+                  setActiveClientIndex(-1);
+                }}
+                onKeyDown={event => handleClientLookupKeyDown('phone', event)}
                 className={`w-full bg-brand-bg border rounded-lg px-4 py-2 mt-1 text-sm outline-none transition-all ${
                   isDuplicateClientPhone
                     ? 'border-amber-500 text-foreground focus:ring-1 focus:ring-amber-500'
                     : 'border-brand-border text-foreground focus:ring-1 focus:ring-brand-gold focus:border-brand-gold'
                 }`}
                 placeholder="(11) 99999-9999"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-haspopup="listbox"
+                aria-expanded={clientLookupField === 'phone' && canSearchClients && !selectedClientId}
+                aria-controls="attendance-client-results-phone"
+                aria-activedescendant={clientLookupField === 'phone' && matchingClients[activeClientIndex]
+                  ? `attendance-client-option-phone-${matchingClients[activeClientIndex].id}`
+                  : undefined}
                 aria-describedby={isDuplicateClientPhone
                   ? 'attendance-client-phone-help attendance-client-phone-duplicate'
                   : 'attendance-client-phone-help'}
               />
-              <p id="attendance-client-phone-help" className="mt-1 text-xs text-muted-foreground">
+              {renderClientLookupResults('phone')}
+              <p id="attendance-client-phone-help" className="sr-only">
                 {isDuplicateClientPhone
                   ? 'O atendimento e a visita serão vinculados ao cadastro existente.'
                   : selectedClient
                     ? 'O atendimento e a visita serão vinculados a este cadastro.'
-                    : 'Com o telefone, o cliente e esta visita também serão salvos em Clientes.'}
+                    : 'Informe telefone para criar o cadastro. Se tiver apenas e-mail, cadastre-o em Clientes e selecione-o aqui.'}
               </p>
               {isDuplicateClientPhone && (
                 <p
@@ -1005,7 +1194,10 @@ export default function Controle() {
             </div>
 
             <div>
-              <label htmlFor="attendance-client-birthday" className="text-xs font-semibold text-foreground uppercase tracking-wide">Data de nascimento</label>
+              <div className="flex items-center gap-1">
+                <label htmlFor="attendance-client-birthday" className="text-xs font-semibold text-foreground uppercase tracking-wide">Data de nascimento</label>
+                <FeatureInfo label="Data de nascimento">Campo opcional. Quando informado, fica salvo no cadastro do cliente.</FeatureInfo>
+              </div>
               <input
                 id="attendance-client-birthday"
                 data-testid="input-attendance-client-birthday"
@@ -1014,18 +1206,22 @@ export default function Controle() {
                 onChange={e => setClientBirthday(e.target.value)}
                 className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold focus:border-brand-gold outline-none transition-all"
               />
-              <p className="mt-1 text-xs text-muted-foreground">Opcional. Será salva no cadastro do cliente.</p>
             </div>
               </>
             )}
 
             <div className="border-b border-brand-border/70 pb-2 pt-1">
-              <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">2. Plano, serviço e profissional</h4>
-              <p className="mt-1 text-xs text-muted-foreground">Escolha um plano quando aplicável e indique quem realizou o atendimento.</p>
+              <div className="flex items-center gap-1">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">2. Plano, serviço e profissional</h4>
+                <FeatureInfo label="Plano, serviço e profissional">Selecione o plano do cliente quando houver, informe a categoria e descrição do serviço e escolha quem realizou o atendimento.</FeatureInfo>
+              </div>
             </div>
 
             <div>
-              <label htmlFor="attendance-plan" className="text-xs font-semibold text-foreground uppercase tracking-wide">Plano do cliente</label>
+              <div className="flex items-center gap-1">
+                <label htmlFor="attendance-plan" className="text-xs font-semibold text-foreground uppercase tracking-wide">Plano do cliente</label>
+                <FeatureInfo label="Plano do cliente">O uso será descontado ao salvar. Se o cliente não tiver assinatura, use “Atribuir plano neste registro”. A mensalidade só entra no caixa quando o pagamento for confirmado. O cadastro do plano deve estar configurado em Planos e Mensalidades.</FeatureInfo>
+              </div>
               <select
                 id="attendance-plan"
                 data-testid="select-attendance-plan"
@@ -1044,7 +1240,10 @@ export default function Controle() {
                   const firstBenefit = nextSubscriber ? availablePlanBenefits(nextSubscriber)[0] : undefined;
                    const firstService = config.services.find(item => item.id === firstBenefit?.serviceId);
                   setServiceId(firstService?.id ?? '');
-                  if (firstService) setService(firstService.name);
+                  if (firstService) {
+                    setService(firstService.name);
+                    setServiceDescription(firstService.name);
+                  }
                   setValue('0');
                 }}
                 className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none disabled:opacity-60"
@@ -1058,9 +1257,6 @@ export default function Controle() {
                   </option>;
                 })}
               </select>
-              {anonymousAttendance
-                ? <p className="mt-1 text-xs text-muted-foreground">Identifique o cliente para consultar ou atribuir um plano.</p>
-                : !selectedClient && <p className="mt-1 text-xs text-muted-foreground">Selecione um cliente cadastrado para usar um plano; ou atribua um plano abaixo com nome e telefone.</p>}
               {selectedClient && matchedPlanSubscribers.length === 0 && (
                 <p className="mt-1 text-xs text-muted-foreground">Nenhum assinante correspondente foi encontrado. Confira o telefone ou o nome cadastrado no plano.</p>
               )}
@@ -1127,11 +1323,11 @@ export default function Controle() {
                           </select>
                         </div>
                       )}
-                      <p className="text-xs text-muted-foreground">
+                      <FeatureInfo label="Confirmação do plano">
                         {confirmPlanPayment
                           ? 'A mensalidade será registrada no caixa e os usos liberados.'
                           : 'Sem confirmação, a assinatura ficará pendente e não entrará no caixa.'}
-                      </p>
+                      </FeatureInfo>
                       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                         <button
                           type="button"
@@ -1157,12 +1353,11 @@ export default function Controle() {
                   )}
                 </div>
               )}
-              {plans.length === 0 && <p className="mt-2 text-xs text-muted-foreground">Cadastre um plano em Planos e Mensalidades antes de atribuí-lo.</p>}
             </div>
             
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label className="text-xs font-semibold text-foreground uppercase tracking-wide">Serviço *</label>
+                <label className="text-xs font-semibold text-foreground uppercase tracking-wide">Categoria do serviço *</label>
                 <select
                   data-testid="select-attendance-service"
                   value={selectedPlanSubscriber ? serviceId : (serviceItem?.id ?? '')}
@@ -1170,7 +1365,10 @@ export default function Controle() {
                     const nextId = event.target.value;
                     const nextService = config.services.find(item => item.id === nextId);
                     setServiceId(nextId);
-                    if (nextService) setService(nextService.name);
+                    if (nextService) {
+                      setService(nextService.name);
+                      setServiceDescription(nextService.name);
+                    }
                     if (selectedPlanSubscriber) setValue('0');
                   }}
                   className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none"
@@ -1187,6 +1385,25 @@ export default function Controle() {
                     </option>;
                   })}
                 </select>
+              </div>
+              <div>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="attendance-service-description" className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                    Descrição do atendimento *
+                  </label>
+                  <FeatureInfo label="Descrição do atendimento">O texto aparece no histórico. A categoria selecionada continua sendo usada nos cálculos de comissão e relatórios.</FeatureInfo>
+                </div>
+                <input
+                  id="attendance-service-description"
+                  data-testid="input-attendance-service-description"
+                  type="text"
+                  required
+                  maxLength={160}
+                  value={serviceDescription}
+                  onChange={event => setServiceDescription(event.target.value)}
+                  className="w-full rounded-lg border border-brand-border bg-brand-bg px-4 py-2 text-sm text-foreground outline-none transition-all focus:border-brand-gold focus:ring-1 focus:ring-brand-gold"
+                  placeholder="Ex.: corte degradê e barba"
+                />
               </div>
               <div>
                 <label htmlFor="attendance-professional" className="text-xs font-semibold text-foreground uppercase tracking-wide">
@@ -1218,6 +1435,7 @@ export default function Controle() {
                         <select
                           aria-label={`Profissional adicional ${index + 1}`}
                           data-testid={`select-attendance-additional-professional-${index}`}
+                          ref={element => { additionalProfessionalSelectRefs.current[index] = element; }}
                           required
                           value={additionalId}
                           onChange={event => {
@@ -1257,15 +1475,19 @@ export default function Controle() {
                     ))}
                     <button
                       type="button"
-                      onClick={() => setAdditionalProfessionalIds(current => [...current, ''])}
+                      onClick={() => {
+                        pendingAttendanceFocus.current = {
+                          kind: 'additional-professional',
+                          index: additionalProfessionalIds.length,
+                        };
+                        setAdditionalProfessionalIds(current => [...current, '']);
+                      }}
                       disabled={!resolvedProfId || additionalProfessionalIds.length >= Math.max(activeProfs.length - 1, 0)}
                       className="text-sm font-semibold text-brand-gold hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       + Adicionar outro profissional
                     </button>
-                    <p className="text-xs text-muted-foreground">
-                      Com mais de um profissional, a comissão de cada um será informada em reais neste lançamento.
-                    </p>
+                    <FeatureInfo label="Comissão para vários profissionais">Quando houver mais de um profissional, informe em reais a comissão de cada pessoa neste lançamento.</FeatureInfo>
                   </div>
                 )}
               </div>
@@ -1281,15 +1503,17 @@ export default function Controle() {
                   <h4 id="attendance-manual-commissions-title" className="text-sm font-bold text-brand-gold">
                     {isProsthesisApplication ? 'Comissão por aplicação' : 'Comissão manual por profissional'}
                   </h4>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {isProsthesisApplication
-                      ? 'Cada profissional recebe R$ 140,00 por aplicação. Marcos Macedo recebe 50% do lucro: valor do serviço menos o custo dos produtos consumidos.'
-                      : `O salão fica com 50% ${commissionBasisDescription}. Informe quanto cada profissional recebe; a soma precisa fechar os outros 50%.`}
-                  </p>
+                  <div className="mt-1">
+                    <FeatureInfo label={isProsthesisApplication ? 'Comissão por aplicação' : 'Divisão das comissões'}>
+                      {isProsthesisApplication
+                        ? 'Cada profissional recebe R$ 140,00 por aplicação. Marcos Macedo recebe 50% do lucro: valor do serviço menos o custo dos produtos consumidos.'
+                        : usesConfiguredPlanSplit
+                          ? `Informe o valor em reais para cada profissional. A soma deve fechar ${brl(manualCommissionTarget)}, a parte profissional deste uso.`
+                          : `O salão fica com 50% ${commissionBasisDescription}. Informe quanto cada profissional recebe; a soma precisa fechar os outros 50%.`}
+                    </FeatureInfo>
+                  </div>
                   {isSalesAttributedService && (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Se houver vendedor atribuído, a comissão de venda é calculada separadamente.
-                    </p>
+                    <FeatureInfo label="Comissão por venda">A comissão do vendedor é calculada separadamente da comissão de quem realizou o serviço.</FeatureInfo>
                   )}
                 </div>
                 {assignedProfessionalIds.map(id => {
@@ -1338,12 +1562,20 @@ export default function Controle() {
                   <>
                     <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                       <div className="flex justify-between rounded-lg bg-brand-bg/70 px-3 py-2">
-                        <span>Parte dos profissionais ({Math.round(PROFESSIONAL_SERVICE_COMMISSION_RATE * 100)}%)</span>
+                        <span>
+                          {usesConfiguredPlanSplit
+                            ? `Parte profissional deste uso (${100 - (planSalonSharePercentForUsage ?? 0)}%)`
+                            : `Parte dos profissionais (${Math.round(PROFESSIONAL_SERVICE_COMMISSION_RATE * 100)}%)`}
+                        </span>
                         <strong>{brl(manualCommissionTarget)}</strong>
                       </div>
                       <div className="flex justify-between rounded-lg bg-brand-bg/70 px-3 py-2">
-                        <span>Parte do salão (50%)</span>
-                        <strong>{brl(manualCommissionTarget)}</strong>
+                        <span>
+                          {usesConfiguredPlanSplit
+                            ? `Parte do salão neste uso (${planSalonSharePercentForUsage ?? 0}%)`
+                            : 'Parte do salão (50%)'}
+                        </span>
+                        <strong>{brl(usesConfiguredPlanSplit ? planSalonValueForUse : manualCommissionTarget)}</strong>
                       </div>
                     </div>
                     <p
@@ -1368,9 +1600,10 @@ export default function Controle() {
                 className="rounded-xl border border-brand-gold/30 bg-brand-gold/5 p-4 space-y-2"
                 aria-labelledby="attendance-sales-attribution-title"
               >
-                <h4 id="attendance-sales-attribution-title" className="text-sm font-bold text-brand-gold">
-                  Atribuição da venda
-                </h4>
+                <div className="flex items-center gap-1">
+                  <h4 id="attendance-sales-attribution-title" className="text-sm font-bold text-brand-gold">Atribuição da venda</h4>
+                  <FeatureInfo label="Atribuição da venda">A pessoa que vendeu pode ser diferente do profissional que realizou o serviço. A comissão da venda é separada.</FeatureInfo>
+                </div>
                 <label htmlFor="attendance-seller" className="text-xs font-semibold text-foreground uppercase tracking-wide">
                   Vendedor *
                 </label>
@@ -1388,9 +1621,6 @@ export default function Controle() {
                   ))}
                   <option value="company">Própria Empresa</option>
                 </select>
-                <p className="text-xs text-muted-foreground">
-                  O profissional que realizou o serviço pode ser diferente de quem vendeu.
-                </p>
               </section>
             )}
 
@@ -1425,8 +1655,12 @@ export default function Controle() {
                       </div>
                     ) : (
                       <div className="flex justify-between gap-3 text-xs text-muted-foreground">
-                        <span>Parte do salão (50%)</span>
-                        <span>{brl(manualCommissionTarget)}</span>
+                        <span>
+                          {usesConfiguredPlanSplit
+                            ? `Parte do salão neste uso (${planSalonSharePercentForUsage}%)`
+                            : 'Parte do salão (50%)'}
+                        </span>
+                        <span>{brl(usesConfiguredPlanSplit ? planSalonValueForUse : manualCommissionTarget)}</span>
                       </div>
                     )}
                     {sellerProfessionalId !== 'company' && selectedSeller && (
@@ -1445,13 +1679,19 @@ export default function Controle() {
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <span className="text-brand-gold font-medium">
-                        Comissão do profissional (50%{isPlanAttendance ? ` sobre ${brl(planValueForUse)} rateados` : ''}):
+                        {usesConfiguredPlanSplit
+                          ? `Comissão do profissional (plano · uso ${planUseOrdinal}/${planTotalUses}):`
+                          : `Comissão do profissional (50%${isPlanAttendance ? ` sobre ${brl(planValueForUse)} rateados` : ''}):`}
                       </span>
                       <span className="font-bold text-brand-gold">{brl(calculatedComm)}</span>
                     </div>
                     <div className="flex justify-between items-center text-xs text-muted-foreground">
-                      <span>Parte do salão (50%)</span>
-                      <span>{brl(manualCommissionTarget)}</span>
+                      <span>
+                        {usesConfiguredPlanSplit
+                          ? `Parte do salão neste uso (${planSalonSharePercentForUsage}%)`
+                          : 'Parte do salão (50%)'}
+                      </span>
+                      <span>{brl(usesConfiguredPlanSplit ? planSalonValueForUse : manualCommissionTarget)}</span>
                     </div>
                   </div>
                 )}
@@ -1459,15 +1699,16 @@ export default function Controle() {
             )}
 
             <div className="border-b border-brand-border/70 pb-2 pt-1">
-              <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">3. Valores, produtos e pagamento</h4>
-              <p className="mt-1 text-xs text-muted-foreground">Confira os valores e registre os itens consumidos antes de salvar.</p>
+              <div className="flex items-center gap-1">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">3. Valores, produtos e pagamento</h4>
+                <FeatureInfo label="Valores, produtos e pagamento">Revise o valor do serviço, informe gorjeta, produtos consumidos e forma de pagamento antes de salvar.</FeatureInfo>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                  <label className="text-xs font-semibold text-foreground uppercase tracking-wide">Valor do Serviço</label>
                   <input data-testid="input-attendance-service-value" type="number" min="0" step="0.01" required readOnly={isPlanMode} value={isPlanMode ? '0' : value} onChange={e => setValue(e.target.value)} className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none read-only:opacity-70" placeholder={isPlanMode ? 'Incluído na mensalidade do plano' : 'Digite o valor'} />
-                  {isPlanAttendance && <p className="mt-1 text-xs text-muted-foreground">Atendimento coberto pelo plano. O uso será descontado ao salvar; referência de comissão: {brl(planValueForUse)}.</p>}
               </div>
               <div>
                 <label className="text-xs font-semibold text-foreground uppercase tracking-wide">Gorjeta (R$)</label>
@@ -1476,14 +1717,14 @@ export default function Controle() {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-foreground uppercase tracking-wide mb-1 block">
-                Produtos Consumidos{isProsthesisApplication ? ' · custos descontados do lucro' : ''}
-              </label>
-              {isProsthesisApplication && (
-                <p className="mb-2 text-xs text-muted-foreground">
-                  O produto marcado como prótese capilar é adicionado automaticamente, descontado do estoque e do lucro do Marcos, sem cobrança extra ao cliente.
-                </p>
-              )}
+                  <div className="mb-1 flex items-center gap-1">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-foreground">
+                      Produtos Consumidos{isProsthesisApplication ? ' · custos descontados do lucro' : ''}
+                    </label>
+                    {isProsthesisApplication && (
+                      <FeatureInfo label="Produto de prótese capilar">O produto marcado como prótese capilar é adicionado automaticamente e descontado do estoque e do lucro do Marcos, sem cobrança extra ao cliente.</FeatureInfo>
+                    )}
+                  </div>
               {isProsthesisApplication && !hasProsthesisProductSelected && (
                 <p role="alert" className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                   {markedProsthesisProducts.length === 0
@@ -1494,11 +1735,17 @@ export default function Controle() {
               <div className="space-y-2">
                 {apptProducts.map((ap, i) => (
                   <div key={i} className="flex gap-2 items-center">
-                    <select value={ap.productId} onChange={e => updateApptProduct(i, 'productId', e.target.value)} className="min-h-11 min-w-0 flex-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none">
+                    <select
+                      ref={element => { productSelectRefs.current[i] = element; }}
+                      data-testid={`select-attendance-product-${i}`}
+                      value={ap.productId}
+                      onChange={e => updateApptProduct(i, 'productId', e.target.value)}
+                      className="min-h-11 min-w-0 flex-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none"
+                    >
                       <option value="">Selecione o produto...</option>
                       {products.map(p => <option key={p.id} value={p.id}>{p.name}{p.isProsthesisCapillary ? ' · prótese capilar' : ''} ({p.stock} em estoque)</option>)}
                     </select>
-                    <input type="number" min="1" value={ap.quantity} onChange={e => updateApptProduct(i, 'quantity', parseInt(e.target.value) || 1)} className="min-h-11 w-20 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none" />
+                    <input type="number" min="1" value={ap.quantity} aria-label={`Quantidade do produto ${i + 1}`} onChange={e => updateApptProduct(i, 'quantity', parseInt(e.target.value) || 1)} className="min-h-11 w-20 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none" />
                     <button type="button" aria-label="Remover produto" onClick={() => removeApptProduct(i)} className="flex min-h-11 min-w-11 items-center justify-center rounded-lg p-2 text-destructive transition-all hover:bg-destructive/10 hover:scale-105"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 ))}
@@ -1508,26 +1755,41 @@ export default function Controle() {
 
             <div>
               <label className="text-xs font-semibold text-foreground uppercase tracking-wide">Forma de Pagamento *</label>
-              <select value={payMethod} onChange={e => setPayMethod(e.target.value as PayMethod)} className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none">
+              <select data-testid="select-attendance-payment-method" value={payMethod} onChange={e => setPayMethod(e.target.value as PayMethod)} className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none">
                 {config.paymentMethods.filter(p => p.isActive).map(payment => <option key={payment.key} value={payment.key}>{payment.label}</option>)}
               </select>
               <div className="mt-2 space-y-2">
                 {paymentSplits.map((payment, index) => (
                   <div key={index} className="flex gap-2">
-                    <select value={payment.method} onChange={e => setPaymentSplits(items => items.map((item, i) => i === index ? { ...item, method: e.target.value as PayMethod } : item))} className="min-h-11 min-w-0 flex-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm">
+                    <select
+                      data-testid={`select-attendance-payment-split-${index}`}
+                      ref={element => { paymentMethodSelectRefs.current[index] = element; }}
+                      value={payment.method}
+                      onChange={e => setPaymentSplits(items => items.map((item, i) => i === index ? { ...item, method: e.target.value as PayMethod } : item))}
+                      className="min-h-11 min-w-0 flex-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-brand-gold"
+                    >
                       {config.paymentMethods.filter(p => p.isActive).map(paymentOption => <option key={paymentOption.key} value={paymentOption.key}>{paymentOption.label}</option>)}
                     </select>
                     <input type="number" min="0" step="0.01" value={payment.amount || ''} onChange={e => setPaymentSplits(items => items.map((item, i) => i === index ? { ...item, amount: Number(e.target.value) } : item))} className="min-h-11 w-28 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm" aria-label={`Valor da forma ${index + 1}`} />
                     <button type="button" onClick={() => setPaymentSplits(items => items.filter((_, i) => i !== index))} className="flex min-h-11 min-w-11 items-center justify-center rounded-lg px-2 text-destructive" aria-label="Remover forma de pagamento"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 ))}
-                <button type="button" onClick={() => setPaymentSplits(items => [...items, { method: 'pix', amount: 0 }])} className="min-h-11 text-sm font-medium text-brand-gold hover:underline">+ Adicionar Forma de Pagamento</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    pendingAttendanceFocus.current = { kind: 'payment', index: paymentSplits.length };
+                    setPaymentSplits(items => [...items, { method: 'pix', amount: 0 }]);
+                  }}
+                  className="min-h-11 text-sm font-medium text-brand-gold hover:underline"
+                >
+                  + Adicionar Forma de Pagamento
+                </button>
               </div>
             </div>
             
             <div>
               <label className="text-xs font-semibold text-foreground uppercase tracking-wide">Observações</label>
-              <textarea value={notes} onChange={e => setNotes(e.target.value)} className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none h-20 resize-none"></textarea>
+              <textarea data-testid="input-attendance-notes" aria-label="Observações" value={notes} onChange={e => setNotes(e.target.value)} className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none h-20 resize-none"></textarea>
             </div>
 
             <div data-testid="attendance-submit-bar" className="mt-2 border-t border-brand-border/70 pt-4">
