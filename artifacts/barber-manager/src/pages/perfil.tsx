@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { useAuth } from '@/auth/auth';
 import { getRoleLabel } from '@/auth/types';
 import { Camera, UserCircle, Upload, Save, X, Pencil, LockKeyhole } from 'lucide-react';
@@ -109,8 +110,10 @@ export default function Perfil() {
       <div className="flex items-center gap-3 border-b border-brand-border pb-4 sm:gap-4 sm:pb-6">
         <div className="p-3 rounded-xl bg-brand-surface border border-brand-border text-brand-gold"><UserCircle className="w-6 h-6" /></div>
         <div>
-          <h2 className="text-2xl font-bold">Meu Perfil</h2>
-          <p className="text-sm text-muted-foreground mt-1">Gerencie suas informações pessoais e sua foto.</p>
+          <div className="flex items-center gap-1">
+            <h2 className="text-2xl font-bold">Meu Perfil</h2>
+            <FeatureInfo label="Meu perfil">Edite seu nome, foto e senha da conta.</FeatureInfo>
+          </div>
         </div>
       </div>
 
@@ -174,8 +177,10 @@ export default function Perfil() {
         <div className="flex items-center gap-3 border-b border-brand-border/50 pb-4">
           <LockKeyhole className="w-5 h-5 text-brand-gold" />
           <div>
-            <h3 className="text-lg font-bold text-foreground">Segurança da conta</h3>
-            <p className="text-sm text-muted-foreground mt-1">Atualize sua senha sempre que precisar.</p>
+            <div className="flex items-center gap-1">
+              <h3 className="text-lg font-bold text-foreground">Segurança da conta</h3>
+              <FeatureInfo label="Segurança da conta">Atualize sua senha sempre que precisar.</FeatureInfo>
+            </div>
           </div>
         </div>
 
