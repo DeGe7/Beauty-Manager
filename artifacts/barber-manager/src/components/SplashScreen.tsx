@@ -1,3 +1,5 @@
+import { BrandMark } from '@/components/BrandMark';
+
 type SplashScreenProps = {
   message?: string;
   overlay?: boolean;
@@ -22,18 +24,11 @@ export function SplashScreen({
       <div className="bm-loading-glow bm-loading-glow-green" aria-hidden="true" />
 
       <div className="relative z-10 w-full max-w-sm rounded-3xl border border-brand-border bg-brand-surface/90 px-6 py-7 text-center shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-9 sm:py-8">
-        <div
-          className="bm-brand-mark mx-auto grid h-40 w-40 place-items-center rounded-[2rem] border border-brand-gold/20 bg-brand-gold/[0.06]"
-          aria-hidden="true"
-        >
-          <span className="bm-brand-orbit" />
-          <span className="bm-brand-monogram">
-            <span className="text-brand-gold">B</span>
-            <span className="text-foreground">M</span>
-          </span>
+        <div className="mx-auto grid h-36 w-36 place-items-center">
+          <BrandMark className="bm-loading-logo h-full w-full" />
         </div>
 
-        <p className="mt-5 text-lg font-bold tracking-wide text-foreground">Barber Manager</p>
+        <p className="mt-5 text-lg font-bold tracking-wide text-foreground">Beauty Manager</p>
         <p className="mt-2 min-h-5 text-sm text-muted-foreground">{message}</p>
         <div className="mx-auto mt-5 h-1 w-36 overflow-hidden rounded-full bg-brand-border" aria-hidden="true">
           <div className="bm-loading-progress h-full w-1/2 rounded-full bg-brand-gold" />

@@ -94,10 +94,13 @@ export interface Appointment {
   planSubscriberId?: string;
   planUsageValue?: number;
   serviceCommissionRateSnapshot?: number;
+  prosthesisCostSnapshot?: number;
+  prosthesisCommissionRuleSnapshot?: boolean;
   professionalCommissions?: ProfessionalCommissionAssignment[];
   sellerProfessionalId?: string;
   sellerIsCompany?: boolean;
   service: string;
+  serviceDescription?: string;
   duration: number; // minutes
   status: ApptStatus;
   checkedInAt?: string;
@@ -156,6 +159,7 @@ export interface Product {
   id: string;
   name: string;
   category: string;
+  isProsthesisCapillary: boolean;
   price: number;
   cost: number;
   stock: number;
@@ -229,6 +233,33 @@ export interface Income {
   amount: number;
 }
 
+export type ProductSaleDiscountType = 'amount' | 'percent';
+
+export interface ProductSaleItem {
+  productId: string;
+  productName: string;
+  unitPrice: number;
+  quantity: number;
+  discountType?: ProductSaleDiscountType;
+  discountValue: number;
+  discountAmount: number;
+  total: number;
+}
+
+export interface ProductSale {
+  id: string;
+  date: string;
+  reversalDate?: string;
+  reversalReason?: string;
+  reversedAt?: string;
+  clientId?: string;
+  appointmentId?: string;
+  paymentMethod: PayMethod;
+  items: ProductSaleItem[];
+  total: number;
+  createdAt: string;
+}
+
 export interface CashClosing {
   id: string;
   periodStart: string;
@@ -246,6 +277,11 @@ export interface SubscriptionPlan {
   price: number;
   services: Array<string | PlanServiceBenefit>;
   duration: 'Mensal' | 'Trimestral' | 'Semestral' | 'Anual';
+  /**
+   * Salon share for new uses/payments. Null means a legacy plan keeps its
+   * existing professional commission rules until a manager configures it.
+   */
+  salonSharePercent?: number | null;
 }
 
 export interface PlanServiceBenefit {
@@ -264,6 +300,7 @@ export interface Subscriber {
   nextPayment: string;
   status: 'ativo' | 'vencido' | 'pendente';
   usageStartedAt?: string;
+  salonSharePercentSnapshot?: number | null;
 }
 
 export type SubscriptionPaymentStatus = 'pago' | 'pendente' | 'vencido';
@@ -277,6 +314,7 @@ export interface SubscriptionPayment {
   paymentMethod?: PayMethod;
   status: SubscriptionPaymentStatus;
   note?: string;
+  salonSharePercentSnapshot?: number;
 }
 
 export interface BarbeariaConfig {
@@ -361,6 +399,20 @@ export interface AppStoreValue {
   removeProduct: (id: string) => Promise<boolean>;
   sellProduct: (id: string, qty: number) => Promise<boolean>;
   restock: (id: string, qty: number) => Promise<boolean>;
+  productSales: ProductSale[];
+  recordProductSale: (input: {
+    date: string;
+    clientId?: string;
+    appointmentId?: string;
+    paymentMethod: PayMethod;
+    items: Array<{
+      productId: string;
+      quantity: number;
+      discountType?: ProductSaleDiscountType;
+      discountValue: number;
+    }>;
+  }) => Promise<ProductSale | null>;
+  reverseProductSale: (id: string, reason: string) => Promise<ProductSale | null>;
 
   // Prothesis Sales
   prothesisSales: ProthesisSale[];
@@ -397,7 +449,7 @@ export interface AppStoreValue {
 
   // Subscribers
   subscribers: Subscriber[];
-  addSubscriber: (s: Omit<Subscriber, 'id'>) => Promise<boolean>;
+  addSubscriber: (s: Omit<Subscriber, 'id'>) => Promise<Subscriber | null>;
   updateSubscriber: (id: string, s: Partial<Subscriber>) => Promise<boolean>;
   removeSubscriber: (id: string) => Promise<boolean>;
   renewSubscriberPlanUsages: (id: string) => Promise<boolean>;
@@ -439,7 +491,7 @@ export const DEFAULT_ROLES: RoleItem[] = [
 ];
 
 export const DEFAULT_CONFIG: BarbeariaConfig = {
-  name: 'Barber Manager', cnpj: '', address: '',
+  name: 'Beauty Manager', cnpj: '', address: '',
   services: DEFAULT_SERVICES, roles: DEFAULT_ROLES,
   paymentMethods: [
     { key: 'pix', label: 'PIX', isActive: true },
@@ -485,6 +537,7 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
   const [clients, setClients] = useState<Client[]>([]);
   const clientsRef = useRef<Client[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [productSales, setProductSales] = useState<ProductSale[]>([]);
   const [prothesisSales, setProthesisSales] = useState<ProthesisSale[]>([]);
   const [mentoriaSessions, setMentoriaSessions] = useState<MentoriaSession[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -518,6 +571,7 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
       clientsRef.current = [];
       setClients([]);
       setProducts([]);
+      setProductSales([]);
       setProthesisSales([]);
       setMentoriaSessions([]);
       setExpenses([]);
@@ -533,6 +587,7 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
     }
 
     setIsLoading(true);
+    const canLoadFinancialData = profile.role !== 'recepcao';
 
     Promise.all([
       api.professionals.list(),
@@ -540,18 +595,19 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
       api.blocks.list(),
       api.clients.list(),
       api.products.list(),
-      api.prothesisSales.list(),
-      api.mentoriaSessions.list(),
-      api.expenses.list(),
-      api.incomes.list(),
-      api.financeHistory.list(),
-      api.cashClosings.list(),
+      api.productSales.list(),
+      canLoadFinancialData ? api.prothesisSales.list() : Promise.resolve([]),
+      canLoadFinancialData ? api.mentoriaSessions.list() : Promise.resolve([]),
+      canLoadFinancialData ? api.expenses.list() : Promise.resolve([]),
+      canLoadFinancialData ? api.incomes.list() : Promise.resolve([]),
+      canLoadFinancialData ? api.financeHistory.list() : Promise.resolve([]),
+      canLoadFinancialData ? api.cashClosings.list() : Promise.resolve([]),
       api.plans.list(),
       api.subscribers.list(),
       api.subscriptionPayments.list(),
       api.config.get(),
     ])
-      .then(([profs, appts, blks, cls, prods, psales, msessions, exps, incs, history, closings, pls, subs, payments, cfg]) => {
+      .then(([profs, appts, blks, cls, prods, productSalesRows, psales, msessions, exps, incs, history, closings, pls, subs, payments, cfg]) => {
         if (cancelled) return;
         setProfessionals((profs as unknown[]).map(cast<Professional>));
         setAppointments((appts as unknown[]).map(cast<Appointment>));
@@ -563,8 +619,13 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
         }));
         setProducts((prods as unknown[]).map(x => {
           const product = cast<Partial<Product>>(x);
-          return { ...product, isActive: product.isActive ?? true } as Product;
+          return {
+            ...product,
+            isActive: product.isActive ?? true,
+            isProsthesisCapillary: product.isProsthesisCapillary ?? false,
+          } as Product;
         }));
+        setProductSales((productSalesRows as unknown[]).map(cast<ProductSale>));
         setProthesisSales((psales as unknown[]).map(cast<ProthesisSale>));
         setMentoriaSessions((msessions as unknown[]).map(cast<MentoriaSession>));
         setExpenses((exps as unknown[]).map(cast<Expense>));
@@ -880,6 +941,52 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
     return true;
   }, []);
 
+  const recordProductSale = useCallback(async (input: {
+    date: string;
+    clientId?: string;
+    appointmentId?: string;
+    paymentMethod: PayMethod;
+    items: Array<{
+      productId: string;
+      quantity: number;
+      discountType?: ProductSaleDiscountType;
+      discountValue: number;
+    }>;
+  }) => {
+    const saved = await mutation(
+      () => api.productSales.create(input as unknown as Record<string, unknown>),
+      'Erro ao registrar venda de produtos',
+    );
+    if (!saved) return null;
+    const sale = cast<ProductSale>(saved);
+    setProductSales(prev => [...prev, sale].sort((a, b) => b.date.localeCompare(a.date)));
+    try {
+      const updatedProducts = await api.products.list();
+      setProducts(updatedProducts);
+    } catch (error) {
+      console.warn('Sale was saved, but inventory refresh failed:', error);
+      toast.warning('Venda registrada, mas o estoque não foi atualizado na tela. Atualize para conferir.');
+    }
+    return sale;
+  }, []);
+
+  const reverseProductSale = useCallback(async (id: string, reason: string) => {
+    const saved = await mutation(
+      () => api.productSales.reverse(id, reason),
+      'Erro ao estornar a venda de produtos',
+    );
+    if (!saved) return null;
+    const sale = cast<ProductSale>(saved);
+    setProductSales(prev => prev.map(item => item.id === sale.id ? sale : item));
+    try {
+      setProducts(await api.products.list());
+    } catch (error) {
+      console.warn('Sale was reversed, but inventory refresh failed:', error);
+      toast.warning('Estorno registrado, mas o estoque não foi atualizado na tela. Atualize para conferir.');
+    }
+    return sale;
+  }, []);
+
   // ── Prothesis Sales ──
   const addProthesisSale = useCallback(async (s: Omit<ProthesisSale, 'id'>) => {
     const newS: ProthesisSale = { ...s, id: uid() };
@@ -948,13 +1055,15 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
   const addExpense = useCallback(async (e: Omit<Expense, 'id'>) => {
     const newE: Expense = { ...e, id: uid() };
     const saved = await mutation(
-      () => api.expenses.create(newE as unknown as Record<string, unknown>),
+      () => api.expenses.create(newE as unknown as Record<string, unknown>, {
+        returnRepresentation: profile?.role !== 'recepcao',
+      }),
       'Erro ao salvar despesa',
     );
     if (!saved) return false;
     setExpenses(prev => [...prev, cast<Expense>(saved)]);
     return true;
-  }, []);
+  }, [profile?.role]);
 
   const updateExpense = useCallback(async (id: string, e: Partial<Expense>) => {
     const saved = await mutation(
@@ -1069,9 +1178,10 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
       () => api.subscribers.create(newS as unknown as Record<string, unknown>),
       'Erro ao salvar assinante',
     );
-    if (!saved) return false;
-    setSubscribers(prev => [...prev, cast<Subscriber>(saved)]);
-    return true;
+    if (!saved) return null;
+    const subscriber = cast<Subscriber>(saved);
+    setSubscribers(prev => [...prev, subscriber]);
+    return subscriber;
   }, []);
 
   const updateSubscriber = useCallback(async (id: string, s: Partial<Subscriber>) => {
@@ -1165,7 +1275,7 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
     appointments, addAppointment, updateAppointment, removeAppointment,
     blocks, addBlock, removeBlock,
     clients, addClient, updateClient, removeClient, addVisit, removeVisit,
-    products, addProduct, updateProduct, removeProduct, sellProduct, restock,
+    products, addProduct, updateProduct, removeProduct, sellProduct, restock, productSales, recordProductSale, reverseProductSale,
     prothesisSales, addProthesisSale, updateProthesisSale, removeProthesisSale,
     mentoriaSessions, addMentoriaSession, updateMentoriaSession, removeMentoriaSession,
     expenses, addExpense, updateExpense, removeExpense,

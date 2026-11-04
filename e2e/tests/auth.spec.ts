@@ -225,7 +225,7 @@ test.describe('autenticação e onboarding', () => {
     test.skip(!accounts.manager, 'Requires E2E_MANAGER_EMAIL and E2E_MANAGER_PASSWORD.');
     const account = requireAccount(accounts.manager, 'manager');
     await page.goto('/login');
-    await expect(page.getByRole('heading', { name: 'Barber Manager' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Beauty Manager' })).toBeVisible();
     await page.getByLabel('E-mail').fill(account.email);
     await page.getByLabel('Senha').fill(`${account.password}-invalid`);
     await page.getByRole('button', { name: 'Entrar', exact: true }).click();

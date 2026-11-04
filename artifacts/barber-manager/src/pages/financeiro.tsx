@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useStore, brl, ExpenseCategory, EXPENSE_CATEGORIES, PAY_LABELS, PayMethod, ProfessionalCommissions } from '@/data/store';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import {
@@ -14,6 +15,8 @@ import { formatDateKey, formatMonthKey, parseDateKey } from '@/data/date';
 import { appointmentCommissionForProfessional } from '@/data/appointment-commissions';
 import { api, type PersonalEarning } from '@/data/api';
 import { getNextCashClosingWindow, type CashClosingSchedule } from '@/data/cash-closing';
+import { subscriptionReceiptDate } from '@/data/subscription-payment';
+import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
 
 const TABS = ['Visão Geral', 'Por Profissional', 'Serviços', 'Produtos'] as const;
 type Period = 'anual' | 'semestral' | 'trimestral' | 'mensal' | 'semanal';
@@ -140,7 +143,22 @@ function PersonalEarningsPanel({
 export default function Financeiro() {
   const { profile, viewAsProfile } = useAuth();
   const activeProfile = viewAsProfile ?? profile;
-  const { expenses, incomes, appointments, professionals, products, prothesisSales, mentoriaSessions, config, addExpense, updateExpense, removeExpense, addIncome, updateIncome, removeIncome, financeHistory, refreshFinanceHistory, cashClosings, addCashClosing, removeCashClosing, updateConfig, isLoading } = useStore();
+  const {
+    expenses, incomes, appointments, professionals, products, productSales, prothesisSales, mentoriaSessions,
+    plans, subscribers, subscriptionPayments, config, addExpense, updateExpense, removeExpense,
+    addIncome, updateIncome, removeIncome, financeHistory, refreshFinanceHistory, cashClosings,
+    addCashClosing, removeCashClosing, updateConfig, isLoading,
+  } = useStore();
+  const financeAnimationItems = useMemo(() => [
+    ...appointments.map(item => ({ id: `appointment:${item.id}` })),
+    ...prothesisSales.map(item => ({ id: `prosthesis:${item.id}` })),
+    ...mentoriaSessions.map(item => ({ id: `mentoring:${item.id}` })),
+    ...productSales.map(item => ({ id: `product-sale:${item.id}` })),
+    ...productSales.filter(item => item.reversalDate).map(item => ({ id: `product-reversal:${item.id}` })),
+    ...incomes.map(item => ({ id: `income:${item.id}` })),
+    ...expenses.map(item => ({ id: `expense:${item.id}` })),
+  ], [appointments, productSales, prothesisSales, mentoriaSessions, incomes, expenses]);
+  const recentlyAddedFinanceIds = useRecentlyAddedIds(financeAnimationItems, isLoading);
   const isManager = activeProfile?.role === 'gestor' || activeProfile?.role === 'dev-admin';
 
   const [activeTab, setActiveTab] = useState<typeof TABS[number]>('Visão Geral');
@@ -194,6 +212,11 @@ export default function Financeiro() {
 
   const cashWindow = getNextCashClosingWindow(storedCashSchedule, cashClosings, formatDateKey());
   const isInCashWindow = (date: string) => date >= cashWindow.periodStart && date <= cashWindow.periodEnd;
+  const paidSubscriptionReceipts = subscriptionPayments.flatMap(payment => {
+    const receiptDate = subscriptionReceiptDate(payment);
+    return receiptDate ? [{ ...payment, receiptDate }] : [];
+  });
+  const cashSubscriptionReceipts = paidSubscriptionReceipts.filter(payment => isInCashWindow(payment.receiptDate));
   const cashAppointments = appointments.filter(item =>
     isInCashWindow(item.date) && (item.status === 'confirmed' || item.status === 'completed'),
   );
@@ -205,7 +228,8 @@ export default function Financeiro() {
     cashAppointments.reduce((sum, item) => sum + item.value + (item.tip || 0), 0) +
     cashProthesis.reduce((sum, item) => sum + (item.installments > 0 ? item.installmentsPaid / item.installments * item.value : 0), 0) +
     cashMentoria.reduce((sum, item) => sum + item.value, 0) +
-    cashIncomes.reduce((sum, item) => sum + item.amount, 0),
+    cashIncomes.reduce((sum, item) => sum + item.amount, 0) +
+    cashSubscriptionReceipts.reduce((sum, item) => sum + item.amount, 0),
   );
   const cashTotalExpenses = roundMoney(cashExpenses.reduce((sum, item) => sum + item.amount, 0));
   const cashNetTotal = roundMoney(cashTotalIncome - cashTotalExpenses);
@@ -248,15 +272,23 @@ export default function Financeiro() {
 
   const mExpenses = expenses.filter(e => periodMatch(e.date));
   const mIncomes = incomes.filter(i => periodMatch(i.date));
+  const mProductSales = productSales.filter(sale => periodMatch(sale.date));
+  const mProductReversals = productSales.filter(sale => Boolean(sale.reversalDate && periodMatch(sale.reversalDate)));
   const mAppts = appointments.filter(a => periodMatch(a.date) && (a.status === 'confirmed' || a.status === 'completed'));
   const mProthesis = prothesisSales.filter(p => periodMatch(p.date));
   const mMentoria = mentoriaSessions.filter(m => periodMatch(m.date) && m.status === 'completed');
+  const mPlanPayments = paidSubscriptionReceipts
+    .filter(payment => periodMatch(payment.receiptDate))
+    .sort((a, b) => b.receiptDate.localeCompare(a.receiptDate));
 
   const apptRevenue = mAppts.reduce((s, a) => s + a.value + (a.tip || 0), 0);
   const prothesisRevenue = mProthesis.reduce((s, p) => s + (p.installmentsPaid / p.installments) * p.value, 0);
   const mentoriaRevenue = mMentoria.reduce((s, m) => s + m.value, 0);
   const manualRevenue = mIncomes.reduce((s, i) => s + i.amount, 0);
-  const totalIn = apptRevenue + prothesisRevenue + mentoriaRevenue + manualRevenue;
+  const productSalesRevenue = mProductSales.reduce((sum, sale) => sum + sale.total, 0)
+    - mProductReversals.reduce((sum, sale) => sum + sale.total, 0);
+  const planRevenue = mPlanPayments.reduce((sum, payment) => sum + payment.amount, 0);
+  const totalIn = apptRevenue + prothesisRevenue + mentoriaRevenue + manualRevenue + productSalesRevenue + planRevenue;
   const totalOut = mExpenses.reduce((s, e) => s + e.amount, 0);
   const result = totalIn - totalOut;
 
@@ -285,6 +317,17 @@ export default function Financeiro() {
       paymentTotals[sale.payMethod1] += paidAmount;
     }
   });
+  mProductSales.forEach(sale => {
+    paymentTotals[sale.paymentMethod] += sale.total;
+  });
+  mProductReversals.forEach(sale => {
+    paymentTotals[sale.paymentMethod] -= sale.total;
+  });
+  mPlanPayments.forEach(payment => {
+    if (payment.paymentMethod && payment.paymentMethod in paymentTotals) {
+      paymentTotals[payment.paymentMethod] += payment.amount;
+    }
+  });
   mExpenses.forEach(expense => {
     if (expense.paymentMethod && expense.paymentMethod in expenseTotals) {
       expenseTotals[expense.paymentMethod] += expense.amount;
@@ -298,8 +341,14 @@ export default function Financeiro() {
     proth: prothesisSales.filter(p => dateMatch(p.date)).reduce((s, p) => s + (p.installmentsPaid / p.installments) * p.value, 0),
     ment: mentoriaSessions.filter(m => dateMatch(m.date) && m.status === 'completed').reduce((s, m) => s + m.value, 0),
     manual: incomes.filter(i => dateMatch(i.date)).reduce((s, i) => s + i.amount, 0),
+    products: productSales.reduce((sum, sale) => {
+      const saleAmount = dateMatch(sale.date) ? sale.total : 0;
+      const reversalAmount = sale.reversalDate && dateMatch(sale.reversalDate) ? sale.total : 0;
+      return sum + saleAmount - reversalAmount;
+    }, 0),
+    plans: paidSubscriptionReceipts.filter(payment => dateMatch(payment.receiptDate)).reduce((s, payment) => s + payment.amount, 0),
   });
-  const sumRev = (r: ReturnType<typeof periodRevenue>) => r.appt + r.proth + r.ment + r.manual;
+  const sumRev = (r: ReturnType<typeof periodRevenue>) => r.appt + r.proth + r.ment + r.manual + r.products + r.plans;
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const dailyData = Array.from({length: daysInMonth}, (_, i) => {
@@ -343,6 +392,7 @@ export default function Financeiro() {
         appointment,
         professional.id,
         (serviceName, serviceId) => rateFor(professional.id, serviceName, serviceId),
+        professional.name,
       ),
       0,
     );
@@ -368,6 +418,20 @@ export default function Financeiro() {
       }
     });
   });
+  mProductSales.forEach(sale => {
+    sale.items.forEach(item => {
+      if (!prodDataObj[item.productId]) prodDataObj[item.productId] = { qty: 0, rev: 0 };
+      prodDataObj[item.productId].qty += item.quantity;
+      prodDataObj[item.productId].rev += item.total;
+    });
+  });
+  mProductReversals.forEach(sale => {
+    sale.items.forEach(item => {
+      if (!prodDataObj[item.productId]) prodDataObj[item.productId] = { qty: 0, rev: 0 };
+      prodDataObj[item.productId].qty -= item.quantity;
+      prodDataObj[item.productId].rev -= item.total;
+    });
+  });
   const prodDataList = Object.entries(prodDataObj).map(([id, d]) => ({ name: products.find(p=>p.id===id)?.name||'?', ...d })).sort((a,b) => b.rev - a.rev);
 
   const weekDataObj = { 'Dom':0, 'Seg':0, 'Ter':0, 'Qua':0, 'Qui':0, 'Sex':0, 'Sáb':0 };
@@ -380,6 +444,9 @@ export default function Financeiro() {
   mProthesis.forEach(p => addToWeek(p.date, (p.installmentsPaid / p.installments) * p.value));
   mMentoria.forEach(m => addToWeek(m.date, m.value));
   mIncomes.forEach(i => addToWeek(i.date, i.amount));
+  mProductSales.forEach(sale => addToWeek(sale.date, sale.total));
+  mProductReversals.forEach(sale => addToWeek(sale.reversalDate!, -sale.total));
+  mPlanPayments.forEach(payment => addToWeek(payment.receiptDate, payment.amount));
   const weekData = weekDays.map(d => ({ name: d, val: weekDataObj[d as keyof typeof weekDataObj] }));
 
   const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
@@ -389,12 +456,18 @@ export default function Financeiro() {
     const monthProth = prothesisSales.filter(p => p.date.startsWith(prefix));
     const monthMent = mentoriaSessions.filter(ms => ms.date.startsWith(prefix) && ms.status === 'completed');
     const monthManual = incomes.filter(inc => inc.date.startsWith(prefix));
+    const monthProductSales = productSales.filter(sale => sale.date.startsWith(prefix));
+    const monthProductReversals = productSales.filter(sale => sale.reversalDate?.startsWith(prefix));
+    const monthPlans = paidSubscriptionReceipts.filter(payment => payment.receiptDate.startsWith(prefix));
     return {
       name: m,
       in: monthAppts.reduce((s, a) => s + a.value + (a.tip || 0), 0) +
           monthProth.reduce((s, p) => s + (p.installmentsPaid / p.installments) * p.value, 0) +
           monthMent.reduce((s, ms) => s + ms.value, 0) +
-          monthManual.reduce((s, inc) => s + inc.amount, 0),
+          monthManual.reduce((s, inc) => s + inc.amount, 0) +
+          monthProductSales.reduce((sum, sale) => sum + sale.total, 0) -
+          monthProductReversals.reduce((sum, sale) => sum + sale.total, 0) +
+          monthPlans.reduce((s, payment) => s + payment.amount, 0),
       out: expenses.filter(e => e.date.startsWith(prefix)).reduce((s, e) => s + e.amount, 0)
     };
   });
@@ -471,13 +544,15 @@ export default function Financeiro() {
 
   if (PERSONAL_FINANCE_ROLES.has(activeProfile?.role ?? '')) {
     return (
-      <div className="mx-auto max-w-7xl space-y-6 p-5 md:p-8">
+      <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-5 md:space-y-6 md:p-8">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-2xl font-bold text-foreground">Financeiro</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Visão individual dos seus ganhos.</p>
+            <div className="mt-1 flex items-center gap-1">
+              <FeatureInfo label="Financeiro individual">Esta visão mostra somente os ganhos atribuídos ao seu perfil.</FeatureInfo>
+            </div>
           </div>
-          <div className="flex gap-2">
+          <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto">
             <select
               value={period}
               onChange={event => setPeriod(event.target.value as Period)}
@@ -510,10 +585,10 @@ export default function Financeiro() {
   }
 
   return (
-    <div className="p-5 md:p-8 space-y-6 max-w-7xl mx-auto">
+      <div className="p-4 sm:p-5 md:p-8 space-y-5 md:space-y-6 max-w-7xl mx-auto">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <h2 className="text-2xl font-bold text-foreground">Financeiro</h2>
-         <div className="flex gap-2">
+         <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto">
            <select value={period} onChange={e => setPeriod(e.target.value as Period)} className="bg-brand-surface border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none" aria-label="Período financeiro">
              <option value="anual">Anual</option><option value="semestral">Semestral</option><option value="trimestral">Trimestral</option><option value="mensal">Mensal</option><option value="semanal">Semanal</option>
            </select>
@@ -710,28 +785,30 @@ export default function Financeiro() {
                 <div className="bg-brand-surface border border-brand-border rounded-2xl p-6 relative overflow-hidden">
                   <div className="absolute right-0 top-0 w-24 h-24 bg-success/10 blur-2xl rounded-full" />
                   <p className="text-sm font-semibold text-muted-foreground uppercase">Entradas</p>
-                  <p className="text-3xl font-bold text-success mt-2">{brl(totalIn)}</p>
+                  <p className="mt-2 text-2xl font-bold text-success sm:text-3xl">{brl(totalIn)}</p>
                 </div>
                 <div className="bg-brand-surface border border-brand-border rounded-2xl p-6 relative overflow-hidden">
                   <div className="absolute right-0 top-0 w-24 h-24 bg-destructive/10 blur-2xl rounded-full" />
                   <p className="text-sm font-semibold text-muted-foreground uppercase">Saídas</p>
-                  <p className="text-3xl font-bold text-destructive mt-2">{brl(totalOut)}</p>
+                  <p className="mt-2 text-2xl font-bold text-destructive sm:text-3xl">{brl(totalOut)}</p>
                 </div>
                 <div className="bg-brand-surface border border-brand-border rounded-2xl p-6 relative overflow-hidden">
                   <div className="absolute right-0 top-0 w-24 h-24 bg-brand-gold/10 blur-2xl rounded-full" />
                   <p className="text-sm font-semibold text-muted-foreground uppercase">Resultado</p>
-                  <p className={`text-3xl font-bold mt-2 ${result >= 0 ? 'text-brand-gold' : 'text-destructive'}`}>{brl(result)}</p>
+                  <p className={`mt-2 text-2xl font-bold sm:text-3xl ${result >= 0 ? 'text-brand-gold' : 'text-destructive'}`}>{brl(result)}</p>
                 </div>
               </div>
 
               <div className="bg-brand-surface border border-brand-border rounded-2xl p-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-5">
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">Entradas e saídas por forma de pagamento</h3>
-                    <p className="text-xs text-muted-foreground mt-1">Movimentações financeiras no período selecionado</p>
+                    <div className="flex items-center gap-1">
+                      <h3 className="text-lg font-bold text-foreground">Entradas e saídas por forma de pagamento</h3>
+                      <FeatureInfo label="Entradas e saídas">Consulte os valores recebidos e pagos em cada forma de pagamento no período selecionado.</FeatureInfo>
+                    </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {PAYMENT_METHODS.map(method => (
                     <div key={method} className={`rounded-xl border p-4 ${PAYMENT_CARD_STYLES[method]}`}>
                       <p className="text-xs font-semibold uppercase text-muted-foreground">{PAY_LABELS[method]}</p>
@@ -754,6 +831,54 @@ export default function Financeiro() {
                   </p>
                 )}
               </div>
+
+              <section data-testid="finance-plan-receipts" className="bg-brand-surface border border-brand-border rounded-2xl p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-1">
+                      <h3 className="text-lg font-bold text-foreground">Mensalidades recebidas</h3>
+                      <FeatureInfo label="Mensalidades recebidas">Exibe pagamentos confirmados pela data em que foram recebidos. Não registre o mesmo valor novamente como receita manual.</FeatureInfo>
+                    </div>
+                  </div>
+                  <strong className="text-lg text-success">{brl(planRevenue)}</strong>
+                </div>
+                {mPlanPayments.length === 0 ? (
+                  <p className="mt-4 rounded-xl border border-brand-border bg-brand-bg p-4 text-sm text-muted-foreground">
+                    Nenhuma mensalidade paga no período selecionado.
+                  </p>
+                ) : (
+                  <div className="mt-4 divide-y divide-brand-border/70">
+                    {mPlanPayments.slice(0, 10).map(payment => {
+                      const subscriber = subscribers.find(item => item.id === payment.subscriberId);
+                      const plan = plans.find(item => item.id === subscriber?.planId);
+                      return (
+                        <div
+                          key={payment.id}
+                          data-testid="finance-plan-receipt"
+                          className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3 first:pt-0 last:pb-0"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-foreground">
+                              {subscriber?.name ?? 'Assinante removido'}
+                              <span className="font-normal text-muted-foreground"> · {plan?.name ?? 'Plano'}</span>
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {displayDate(payment.receiptDate)}
+                              {payment.paymentMethod ? ` · ${PAY_LABELS[payment.paymentMethod]}` : ' · Forma não informada'}
+                            </p>
+                          </div>
+                          <strong className="text-sm text-success">{brl(payment.amount)}</strong>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {mPlanPayments.length > 10 && (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Mostrando os 10 recebimentos mais recentes de {mPlanPayments.length}.
+                  </p>
+                )}
+              </section>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 bg-brand-surface border border-brand-border rounded-2xl p-6">
@@ -785,9 +910,7 @@ export default function Financeiro() {
                              <DialogHeader>
                                <DialogTitle>Histórico de alterações financeiras</DialogTitle>
                              </DialogHeader>
-                             <p className="text-sm text-muted-foreground">
-                               Consulta somente leitura das alterações feitas em receitas e despesas manuais.
-                             </p>
+                              <FeatureInfo label="Histórico financeiro">Consulta somente leitura das alterações feitas em receitas e despesas manuais.</FeatureInfo>
                              <div className="space-y-3">
                                {financeHistory.length === 0 ? (
                                  <p className="text-sm text-muted-foreground text-center py-8">Nenhuma alteração registrada.</p>
@@ -860,7 +983,7 @@ export default function Financeiro() {
                   </div>
                   <div className="flex-1 overflow-y-auto space-y-2 pr-2">
                     {(() => {
-                       type FeedItem = { id: string; date: string; label: string; description: string; amount: number; sign: '+' | '-'; canDelete: boolean; onDelete?: () => void; onEdit?: () => void };
+                       type FeedItem = { id: string; animationId: string; date: string; label: string; description: string; amount: number; sign: '+' | '-'; canDelete: boolean; onDelete?: () => void; onEdit?: () => void };
                       const feed: FeedItem[] = [
                         ...mAppts.map(a => {
                            const performerIds = a.professionalCommissions && a.professionalCommissions.length > 1
@@ -878,6 +1001,7 @@ export default function Financeiro() {
                             : ` · realizado por ${performer}`;
                           return {
                             id: a.id,
+                            animationId: `appointment:${a.id}`,
                             date: a.date,
                             label: 'Agendamento',
                             description: `${a.client} — ${a.service}${attribution}`,
@@ -886,14 +1010,36 @@ export default function Financeiro() {
                             canDelete: false,
                           };
                         }),
-                        ...mProthesis.map(p => ({ id: p.id, date: p.date, label: 'Prótese', description: `${p.client} (${p.installmentsPaid}/${p.installments} parcelas)`, amount: (p.installmentsPaid / p.installments) * p.value, sign: '+' as const, canDelete: false })),
-                        ...mMentoria.map(m => ({ id: m.id, date: m.date, label: 'Mentoria', description: m.client, amount: m.value, sign: '+' as const, canDelete: false })),
-                         ...mIncomes.map(i => ({ id: i.id, date: i.date, label: 'Manual', description: i.description, amount: i.amount, sign: '+' as const, canDelete: true, onDelete: () => handleRemoveIncome(i.id), onEdit: () => startIncomeEdit(i) })),
-                          ...mExpenses.map(e => ({ id: e.id, date: e.date, label: 'Despesa', description: `${e.description} · ${e.category}${e.paymentMethod ? ` · ${PAY_LABELS[e.paymentMethod]}` : ''}`, amount: e.amount, sign: '-' as const, canDelete: true, onDelete: () => handleRemoveExpense(e.id), onEdit: () => startExpenseEdit(e) })),
+                        ...mProthesis.map(p => ({ id: p.id, animationId: `prosthesis:${p.id}`, date: p.date, label: 'Prótese', description: `${p.client} (${p.installmentsPaid}/${p.installments} parcelas)`, amount: (p.installmentsPaid / p.installments) * p.value, sign: '+' as const, canDelete: false })),
+                        ...mMentoria.map(m => ({ id: m.id, animationId: `mentoring:${m.id}`, date: m.date, label: 'Mentoria', description: m.client, amount: m.value, sign: '+' as const, canDelete: false })),
+                        ...mProductSales.map(sale => ({
+                          id: sale.id,
+                          animationId: `product-sale:${sale.id}`,
+                          date: sale.date,
+                          label: 'Produtos',
+                          description: sale.items.map(item =>
+                            `${item.productName} × ${item.quantity}${item.discountAmount > 0 ? ` · desconto ${brl(item.discountAmount)}` : ''}`,
+                          ).join(', '),
+                          amount: sale.total,
+                          sign: '+' as const,
+                          canDelete: false,
+                        })),
+                        ...mProductReversals.map(sale => ({
+                          id: `reversal:${sale.id}`,
+                          animationId: `product-reversal:${sale.id}`,
+                          date: sale.reversalDate!,
+                          label: 'Estorno',
+                          description: `Venda de produtos · ${sale.reversalReason || 'Motivo não informado'}`,
+                          amount: sale.total,
+                          sign: '-' as const,
+                          canDelete: false,
+                        })),
+                         ...mIncomes.map(i => ({ id: i.id, animationId: `income:${i.id}`, date: i.date, label: 'Manual', description: i.description, amount: i.amount, sign: '+' as const, canDelete: true, onDelete: () => handleRemoveIncome(i.id), onEdit: () => startIncomeEdit(i) })),
+                          ...mExpenses.map(e => ({ id: e.id, animationId: `expense:${e.id}`, date: e.date, label: 'Despesa', description: `${e.description} · ${e.category}${e.paymentMethod ? ` · ${PAY_LABELS[e.paymentMethod]}` : ''}`, amount: e.amount, sign: '-' as const, canDelete: true, onDelete: () => handleRemoveExpense(e.id), onEdit: () => startExpenseEdit(e) })),
                       ].sort((a, b) => b.date.localeCompare(a.date));
                       if (feed.length === 0) return <p className="text-sm text-muted-foreground text-center py-8">Nenhuma movimentação</p>;
                       return feed.map(item => (
-                        <div key={`${item.label}-${item.id}`} className="p-3 bg-brand-bg rounded-lg border border-brand-border flex justify-between items-center group">
+                        <div data-testid={`finance-movement-${item.id}`} key={`${item.label}-${item.id}`} className={`p-3 bg-brand-bg rounded-lg border border-brand-border flex justify-between items-center group ${recentlyAddedFinanceIds.has(item.animationId) ? 'bm-list-item-enter' : ''}`}>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${item.sign === '+' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{item.label}</span>
@@ -921,8 +1067,10 @@ export default function Financeiro() {
 
           {activeTab === 'Por Profissional' && (
             <div className="bg-brand-surface border border-brand-border rounded-2xl p-6">
-              <h3 className="text-lg font-bold text-foreground mb-2">Atendimentos e comissões por profissional</h3>
-              <p className="mb-6 text-xs text-muted-foreground">A receita é atribuída uma única vez a quem realizou o serviço; vendas aparecem separadamente e as comissões consideram os dois papéis.</p>
+              <div className="mb-4 flex items-center gap-1">
+                <h3 className="text-lg font-bold text-foreground">Atendimentos e comissões por profissional</h3>
+                <FeatureInfo label="Comissões por profissional">A receita do serviço é atribuída a quem o realizou. Vendas aparecem separadamente; as comissões consideram ambos os papéis.</FeatureInfo>
+              </div>
               {profData.length === 0 ? <p className="text-muted-foreground text-center py-12">Sem dados para este mês.</p> : (
                 <>
                   <div className="hidden md:block overflow-x-auto">

@@ -3,15 +3,15 @@ import { ShieldAlert } from 'lucide-react';
 
 export default function NoAccess() {
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full p-8 text-center min-h-[60vh]">
-      <div className="p-5 rounded-full bg-destructive/10 text-destructive mb-6 border border-destructive/20 shadow-[0_0_30px_rgba(239,68,68,0.1)]">
+    <div className="flex min-h-[60vh] w-full flex-col items-center justify-center p-5 text-center sm:p-8">
+      <div className="mb-5 rounded-2xl border border-destructive/20 bg-destructive/10 p-4 text-destructive">
         <ShieldAlert className="w-12 h-12" />
       </div>
-      <h1 className="text-3xl font-bold text-foreground mb-3">Acesso Restrito</h1>
-      <p className="text-muted-foreground mb-8 max-w-md text-lg">
+      <h1 className="mb-3 text-2xl font-bold text-foreground sm:text-3xl">Acesso Restrito</h1>
+      <p className="mb-6 max-w-md text-base leading-relaxed text-muted-foreground sm:mb-8 sm:text-lg">
         O seu perfil atual não tem as permissões necessárias para acessar esta área do sistema.
       </p>
-      <Link href="/" className="inline-flex items-center justify-center rounded-lg bg-brand-gold text-brand-bg px-8 py-3 font-bold hover:bg-brand-gold/90 transition-all hover:shadow-[0_0_15px_rgba(201,168,76,0.2)]">
+      <Link href="/" className="inline-flex min-h-12 items-center justify-center rounded-xl bg-brand-gold px-6 py-3 font-bold text-brand-bg transition-all hover:bg-brand-gold/90 sm:px-8">
         Voltar ao Painel Principal
       </Link>
     </div>

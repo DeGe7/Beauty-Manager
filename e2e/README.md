@@ -1,6 +1,6 @@
-# Barber Manager E2E
+# Beauty Manager E2E
 
-The suite uses Playwright against the real Supabase-backed Barber Manager app.
+The suite uses Playwright against the real Supabase-backed Beauty Manager app.
 It never contains a password, anon key, service-role key, or fixed test user.
 
 ## Run

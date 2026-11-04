@@ -1,4 +1,4 @@
-# Barber Manager
+# Beauty Manager
 
 Sistema SaaS de gestão para barbearias, salões de beleza e negócios de prótese capilar.
 

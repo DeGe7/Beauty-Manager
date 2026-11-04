@@ -1,9 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" fill="none">
-  <rect width="180" height="180" rx="40" fill="#15130F"/>
-  <g stroke="#D8B56D" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M83 86 48 39M97 86l35-47" stroke-width="11"/>
-    <circle cx="52" cy="127" r="29" stroke-width="11"/>
-    <circle cx="128" cy="127" r="29" stroke-width="11"/>
-  </g>
-  <circle cx="90" cy="88" r="8" fill="#F0D596"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <rect x="7" y="7" width="106" height="106" rx="23" fill="#17150F" stroke="#766338" stroke-width="1.5"/>
+  <rect x="30" y="31" width="60" height="54" stroke="#D8B85F" stroke-width="4"/>
+  <text x="60" y="68" text-anchor="middle" fill="#E6CB76" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="700" letter-spacing="-1.3">BM</text>
 </svg>

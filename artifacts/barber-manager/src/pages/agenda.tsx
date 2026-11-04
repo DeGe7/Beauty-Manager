@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore, brl, ApptStatus } from '@/data/store';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/data/api';
@@ -239,7 +240,7 @@ export default function Agenda() {
     try {
       await api.googleCalendar.deleteAppointment(appointment.id);
     } catch (error) {
-      toast.warning('Agendamento excluído do Barber Manager, mas pode continuar no Google Agenda.', {
+      toast.warning('Agendamento excluído do Beauty Manager, mas pode continuar no Google Agenda.', {
         description: error instanceof Error ? error.message : 'Não foi possível remover o evento do Google Agenda.',
       });
     }
@@ -347,28 +348,33 @@ export default function Agenda() {
   }[status]);
 
   return (
-    <div className="mx-auto flex min-h-[calc(100dvh-7rem)] max-w-7xl flex-col space-y-5 p-4 sm:p-5 md:h-[calc(100vh-6rem)] md:space-y-6 md:p-8">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <h2 className="text-xl font-bold text-foreground md:text-2xl">Agenda</h2>
-        <div className="flex flex-wrap items-center gap-3">
+    <div className="mx-auto flex min-h-[calc(100dvh-7rem)] max-w-7xl flex-col space-y-4 p-4 sm:space-y-5 sm:p-5 md:h-[calc(100vh-6rem)] md:space-y-6 md:p-8">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 md:gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-foreground md:text-2xl">Agenda</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+            Veja os horários do dia e acompanhe o andamento dos atendimentos.
+          </p>
+        </div>
+        <div className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap sm:gap-3">
            <button
              type="button"
              data-testid="button-sync-google-calendar"
              onClick={() => void syncCurrentMonthToGoogle()}
              disabled={isSyncingGoogle || isLoading}
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-brand-border bg-brand-surface px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-brand-border disabled:opacity-60"
+               className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-brand-border disabled:opacity-60 sm:w-auto sm:px-4"
            >
              <CalendarIcon className="w-4 h-4 text-brand-gold" />
              {isSyncingGoogle ? 'Sincronizando...' : 'Sincronizar mês'}
            </button>
-            <select disabled={ownProfile} value={effectiveFilterProf} onChange={e => setFilterProf(e.target.value)} className="min-h-11 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none disabled:opacity-60">
+             <select disabled={ownProfile} value={effectiveFilterProf} onChange={e => setFilterProf(e.target.value)} className="col-span-2 min-h-11 w-full min-w-0 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none disabled:opacity-60 sm:col-span-1 sm:w-auto">
             <option value="">Todos Profissionais</option>
             {activeProfs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           
           <Dialog open={isBlockOpen} onOpenChange={setIsBlockOpen}>
             <DialogTrigger asChild>
-              <button className="min-h-11 bg-brand-surface border border-brand-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-border transition-colors">
+               <button className="min-h-11 w-full bg-brand-surface border border-brand-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-brand-border transition-colors sm:w-auto sm:px-4">
                 Bloquear Horário
               </button>
             </DialogTrigger>
@@ -394,7 +400,10 @@ export default function Agenda() {
                 </div>
                 {!blockForm.fullDay && (
                   <div>
-                    <label className="text-xs font-semibold text-muted-foreground uppercase">Horários</label>
+                      <div className="flex items-center gap-1">
+                        <label className="text-xs font-semibold text-muted-foreground uppercase">Horários</label>
+                        <FeatureInfo label="Selecionar horários">Use Ctrl no Windows ou Command no Mac para selecionar mais de um horário.</FeatureInfo>
+                      </div>
                     <div className="mt-2 grid max-h-48 grid-cols-3 gap-2 overflow-y-auto md:hidden">
                       {slots.map(slot => {
                         const selected = blockForm.slots.includes(slot);
@@ -424,7 +433,6 @@ export default function Agenda() {
                       <select multiple value={blockForm.slots} onChange={e => setBlockForm(f => ({ ...f, slots: Array.from(e.target.selectedOptions, o => o.value) }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm outline-none h-32">
                         {slots.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
-                      <p className="mt-1 text-xs text-muted-foreground">Use Ctrl ou Command para selecionar mais de um horário.</p>
                     </div>
                   </div>
                 )}
@@ -435,7 +443,7 @@ export default function Agenda() {
 
           <Dialog open={isApptOpen} onOpenChange={setIsApptOpen}>
             <DialogTrigger asChild>
-            <button className="min-h-11 bg-brand-gold text-brand-bg px-4 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2 transition-all">
+            <button className="min-h-11 w-full justify-center bg-brand-gold text-brand-bg px-3 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2 transition-all sm:w-auto sm:px-4">
                 <Plus className="w-4 h-4" /> Novo Agendamento
               </button>
             </DialogTrigger>

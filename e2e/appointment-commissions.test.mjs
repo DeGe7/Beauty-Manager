@@ -2,12 +2,25 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   appointmentCommissionForProfessional,
+  appointmentProductsChargeTotal,
+  automaticProsthesisProductId,
   clampManualCommissionAmount,
   manualCommissionAmountLimit,
   manualCommissionAllocationMatches,
+  manualCommissionAllocationMatchesTarget,
   professionalCommissionPool,
+  prosthesisCommissionForProfessional,
+  prosthesisProductCost,
 } from '../artifacts/barber-manager/src/data/appointment-commissions.ts';
-import { planValuePerUse, subscriberServiceUsesRemaining } from '../artifacts/barber-manager/src/data/plan-usage.ts';
+import {
+  planProfessionalAmountForUse,
+  planProfessionalPoolAmount,
+  planSalonAmountForUse,
+  planSalonShareAmount,
+  planValuePerUse,
+  subscriberServiceUsesRemaining,
+  summarizePlanFinance,
+} from '../artifacts/barber-manager/src/data/plan-usage.ts';
 
 const rateFor = service => ({ 'Prótese Capilar': 0.2, Mentoria: 0.3, Barbearia: 0.4 })[service] ?? 0;
 const appointment = (overrides = {}) => ({
@@ -15,6 +28,53 @@ const appointment = (overrides = {}) => ({
   service: 'Prótese Capilar',
   value: 1000,
   ...overrides,
+});
+
+test('prosthesis used for an application is not charged twice to the client', () => {
+  assert.equal(
+    appointmentProductsChargeTotal(
+      [
+        { productId: 'prosthesis', quantity: 1 },
+        { productId: 'styling-product', quantity: 2 },
+      ],
+      [
+        { id: 'prosthesis', price: 900, isProsthesisCapillary: true },
+        { id: 'styling-product', price: 25, isProsthesisCapillary: false },
+      ],
+      true,
+    ),
+    50,
+  );
+});
+
+test('automatically selects the active marked product named Prótese Capilar', () => {
+  assert.equal(
+    automaticProsthesisProductId([
+      { id: 'other', name: 'Cera', isActive: true, isProsthesisCapillary: false },
+      { id: 'prosthesis', name: 'Prótese Capilar', isActive: true, isProsthesisCapillary: true },
+    ]),
+    'prosthesis',
+  );
+});
+
+test('uses the sole active marked prosthesis product when its name differs', () => {
+  assert.equal(
+    automaticProsthesisProductId([
+      { id: 'prosthesis', name: 'Modelo Premium', isActive: true, isProsthesisCapillary: true },
+      { id: 'inactive', name: 'Prótese Capilar', isActive: false, isProsthesisCapillary: true },
+    ]),
+    'prosthesis',
+  );
+});
+
+test('does not guess when multiple marked products could be consumed', () => {
+  assert.equal(
+    automaticProsthesisProductId([
+      { id: 'one', name: 'Prótese Premium', isActive: true, isProsthesisCapillary: true },
+      { id: 'two', name: 'Prótese Básica', isActive: true, isProsthesisCapillary: true },
+    ]),
+    null,
+  );
 });
 
 test('new attended service gives the executor half of the gross service value', () => {
@@ -155,6 +215,51 @@ test('multiple professionals receive only their manually assigned commission amo
   assert.equal(appointmentCommissionForProfessional(sharedAppointment, 'unassigned', rateFor), 0);
 });
 
+test('prosthesis application pays a fixed R$140 except Marcos, who receives half the net profit', () => {
+  assert.equal(prosthesisCommissionForProfessional(800, 300, 'João Silva'), 140);
+  assert.equal(prosthesisCommissionForProfessional(800, 300, 'Marcos Macedo'), 250);
+  assert.equal(prosthesisCommissionForProfessional(200, 300, 'Marcos Macedo'), 0);
+
+  const application = appointment({
+    value: 800,
+    prosthesisCostSnapshot: 300,
+    prosthesisCommissionRuleSnapshot: true,
+  });
+  assert.equal(
+    appointmentCommissionForProfessional(application, 'executor', rateFor, 'Marcos Macedo'),
+    250,
+  );
+  assert.equal(
+    appointmentCommissionForProfessional(application, 'executor', rateFor, 'João Silva'),
+    140,
+  );
+});
+
+test('Marcos profit uses only consumed inventory items explicitly marked as capillary prostheses', () => {
+  assert.equal(
+    prosthesisProductCost(
+      [
+        { productId: 'hair-piece', quantity: 1 },
+        { productId: 'renamed-item', quantity: 2 },
+        { productId: 'unmarked-prosthesis', quantity: 3 },
+      ],
+      [
+        { id: 'hair-piece', isProsthesisCapillary: true, cost: 300 },
+        { id: 'renamed-item', isProsthesisCapillary: true, cost: 20 },
+        { id: 'unmarked-prosthesis', isProsthesisCapillary: false, cost: 45 },
+      ],
+    ),
+    340,
+  );
+  assert.equal(
+    prosthesisProductCost(
+      [{ productId: 'renamed-item', quantity: 2 }],
+      [{ id: 'renamed-item', name: 'Produto renomeado', category: 'Acessórios', isProsthesisCapillary: true, cost: 20 }],
+    ),
+    40,
+  );
+});
+
 test('plan cost is divided across every included use and cancelled visits do not consume quota', () => {
   const plan = {
     id: 'plan',
@@ -184,4 +289,66 @@ test('plan cost is divided across every included use and cancelled visits do not
 
   assert.equal(planValuePerUse(plan), 20);
   assert.equal(subscriberServiceUsesRemaining(appointments, subscriber, plan.services[0]), 3);
+});
+
+test('plan split allocates exact cents across all uses without exceeding the professional pool', () => {
+  const plan = {
+    id: 'plan-split',
+    name: 'Plano com rateio configurável',
+    price: 100.01,
+    salonSharePercent: 40,
+    duration: 'Mensal',
+    services: [
+      { serviceId: 'cut', serviceName: 'Corte', usesPerCycle: 3 },
+    ],
+  };
+  const useValues = [1, 2, 3].map(ordinal => planProfessionalAmountForUse(plan, ordinal));
+  const salonUseValues = [1, 2, 3].map(ordinal => planSalonAmountForUse(plan, ordinal));
+
+  assert.equal(planSalonShareAmount(plan), 40);
+  assert.equal(planProfessionalPoolAmount(plan), 60.01);
+  assert.deepEqual(useValues, [20.01, 20, 20]);
+  assert.deepEqual(salonUseValues, [13.34, 13.33, 13.33]);
+  assert.equal(useValues.reduce((sum, value, index) => sum + (value ?? 0) + (salonUseValues[index] ?? 0), 0), 100.01);
+  assert.equal(Math.round(useValues.reduce((sum, value) => sum + (value ?? 0), 0) * 100) / 100, 60.01);
+  assert.equal(manualCommissionAllocationMatchesTarget(20.01, [
+    { professionalId: 'one', amount: 12 },
+    { professionalId: 'two', amount: 8.01 },
+  ]), true);
+  assert.equal(manualCommissionAllocationMatchesTarget(20.01, [
+    { professionalId: 'one', amount: 12 },
+    { professionalId: 'two', amount: 8 },
+  ]), false);
+});
+
+test('plan finance summary separates known split, legacy receipts, and commissions earned on uses', () => {
+  const summary = summarizePlanFinance(
+    [
+      { id: 'paid-configured', amount: 100.01, status: 'pago', salonSharePercentSnapshot: 40 },
+      { id: 'paid-legacy', amount: 50, status: 'pago' },
+    ],
+    [
+      {
+        ...appointment({ planSubscriberId: 'subscriber', planUsageValue: 20.01, serviceCommissionRateSnapshot: 1 }),
+        attendanceRecordedAt: '2026-11-03T12:00:00.000Z',
+        status: 'completed',
+      },
+      {
+        ...appointment({ planSubscriberId: 'subscriber', professionalCommissions: [
+          { professionalId: 'one', amount: 12 },
+          { professionalId: 'two', amount: 8.01 },
+        ] }),
+        attendanceRecordedAt: '2026-11-03T12:00:00.000Z',
+        status: 'completed',
+      },
+    ],
+  );
+
+  assert.deepEqual(summary, {
+    receiptTotal: 150.01,
+    salonShareTotal: 40,
+    professionalPoolTotal: 60.01,
+    receiptsWithoutSplit: 50,
+    commissionsRecognizedOnUses: 40.02,
+  });
 });

@@ -3,9 +3,10 @@ import { Link, useLocation } from 'wouter';
 import { useAuth } from '@/auth/auth';
 import CaptchaChallenge, { captchaRequired } from '@/auth/captcha';
 import { isAuthRateLimitError, useAuthRateLimit } from '@/auth/rate-limit';
-import { Mail, Scissors } from 'lucide-react';
+import { CircleAlert, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, type PublicInvitationInfo } from '@/data/api';
+import { BrandMark } from '@/components/BrandMark';
 
 export default function Cadastro() {
   const [, setLocation] = useLocation();
@@ -103,9 +104,9 @@ export default function Cadastro() {
 
   if (!inviteToken) {
     return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-brand-bg p-4">
-        <div className="w-full max-w-md space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-8 text-center shadow-2xl">
-          <Scissors className="mx-auto h-10 w-10 text-brand-gold" />
+      <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
+        <div className="w-full max-w-md space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-5 text-center shadow-2xl sm:p-8">
+          <BrandMark className="mx-auto h-12 w-12" />
           <h1 className="text-2xl font-bold text-foreground">Cadastro somente por convite</h1>
           <p className="text-sm leading-relaxed text-muted-foreground">
             Para proteger a empresa, a criação de conta exige um convite válido. Profissionais novos podem solicitar autorização sem criar uma conta.
@@ -121,7 +122,7 @@ export default function Cadastro() {
 
   if (validatingInvitation) {
     return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-brand-bg p-4 text-center text-sm text-muted-foreground">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg p-5 text-center text-sm text-muted-foreground">
         Validando o convite...
       </div>
     );
@@ -130,9 +131,9 @@ export default function Cadastro() {
   if (!invitationInfo?.valid || invitationInfo.channel === 'phone') {
     const legacyPhoneInvitation = invitationInfo?.channel === 'phone';
     return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-brand-bg p-4">
-        <div className="w-full max-w-md space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-8 text-center shadow-2xl">
-          <Scissors className="mx-auto h-10 w-10 text-destructive" />
+      <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
+        <div className="w-full max-w-md space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-5 text-center shadow-2xl sm:p-8">
+          <CircleAlert className="mx-auto h-10 w-10 text-destructive" aria-hidden="true" />
           <h1 className="text-2xl font-bold text-foreground">Convite não disponível</h1>
           <p role="alert" className="text-sm text-muted-foreground">
             {legacyPhoneInvitation
@@ -151,15 +152,15 @@ export default function Cadastro() {
   }
 
   return (
-    <div className="min-h-[100dvh] flex items-center justify-center bg-brand-bg p-4 relative overflow-hidden">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-brand-bg px-4 py-8">
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-brand-gold/5 rounded-full blur-[100px] pointer-events-none" />
       <div className="w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl shadow-2xl overflow-hidden relative z-10">
-        <div className="p-8 text-center border-b border-brand-border bg-brand-bg/30">
-          <div className="inline-flex items-center justify-center p-4 rounded-xl bg-brand-gold/10 text-brand-gold mb-5 border border-brand-gold/20"><Scissors className="w-8 h-8" /></div>
+        <div className="border-b border-brand-border bg-brand-bg/30 p-5 text-center sm:p-8">
+          <BrandMark className="mx-auto mb-5 h-16 w-16" />
           <h1 className="text-2xl font-bold text-foreground">Criar sua conta</h1>
           <p className="text-sm text-muted-foreground mt-2">Comece a gerenciar seu estabelecimento</p>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4 p-5 sm:p-6">
           {inviteToken && (
             <div className="rounded-lg border border-brand-gold/30 bg-brand-gold/10 p-3 text-sm text-brand-gold">
               Você está se cadastrando a partir de um convite para uma equipe existente.

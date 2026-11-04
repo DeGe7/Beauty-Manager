@@ -25,7 +25,7 @@ export function Current() {
             <Scissors className="h-8 w-8" />
           </div>
           <h1 className="text-2xl font-bold text-foreground">Convite para a equipe</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Você recebeu acesso a um estabelecimento no Barber Manager.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Você recebeu acesso a um estabelecimento no Beauty Manager.</p>
         </header>
         <div className="space-y-4 p-6">
           <div className="flex gap-3 rounded-xl border border-brand-border bg-brand-bg/60 p-4">

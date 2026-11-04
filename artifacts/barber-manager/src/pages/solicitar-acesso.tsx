@@ -37,8 +37,8 @@ export default function SolicitarAcesso() {
   };
 
   return (
-    <main className="flex min-h-[100dvh] items-center justify-center bg-brand-bg p-4">
-      <section className="w-full max-w-lg rounded-2xl border border-brand-border bg-brand-surface p-6 shadow-2xl md:p-8">
+    <main className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
+      <section className="w-full max-w-lg rounded-2xl border border-brand-border bg-brand-surface p-5 shadow-2xl sm:p-6 md:p-8">
         <Link href="/login" className="mb-6 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-brand-gold">
           <ArrowLeft className="h-4 w-4" /> Voltar ao login
         </Link>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 
 interface StatsCardProps {
   label: string;
@@ -12,6 +12,7 @@ interface StatsCardProps {
 }
 
 function useCountUp(target: number, duration = 600) {
+  const reduceMotion = useReducedMotion();
   const [count, setCount] = useState(0);
   const prevTarget = useRef(0);
   const rafRef = useRef<number>(0);
@@ -19,6 +20,11 @@ function useCountUp(target: number, duration = 600) {
   useEffect(() => {
     const from = prevTarget.current;
     prevTarget.current = target;
+    if (reduceMotion) {
+      cancelAnimationFrame(rafRef.current);
+      setCount(target);
+      return;
+    }
     let startTime: number | null = null;
 
     // Cancel any in-flight animation before starting a new one
@@ -42,21 +48,22 @@ function useCountUp(target: number, duration = 600) {
     return () => {
       cancelAnimationFrame(rafRef.current);
     };
-  }, [target, duration]);
+  }, [target, duration, reduceMotion]);
 
   return count;
 }
 
 export function StatsCard({ label, value, format, className = '', icon, colorClass = 'text-foreground', duration = 600 }: StatsCardProps) {
+  const reduceMotion = useReducedMotion();
   const animated = useCountUp(value, duration);
   const display = format ? format(animated) : Math.round(animated).toString();
 
   return (
     <motion.div
       className={`bg-brand-surface border border-brand-border rounded-2xl p-6 flex flex-col gap-3 relative overflow-hidden group ${className}`}
-      initial={{ opacity: 0, y: 8 }}
+      initial={reduceMotion ? false : { opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25 }}
+      transition={{ duration: reduceMotion ? 0 : 0.22, ease: 'easeOut' }}
     >
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">{label}</h3>

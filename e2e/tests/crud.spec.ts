@@ -10,6 +10,7 @@ import {
   waitForMutation,
   waitForRpcMutation,
 } from '../fixtures';
+import type { Locator } from '@playwright/test';
 
 test.describe('CRUD dos módulos de negócio', () => {
   async function createProduct(page: Parameters<typeof loginAs>[0], name: string) {
@@ -41,10 +42,12 @@ test.describe('CRUD dos módulos de negócio', () => {
 
     await openModule(page, '/controle', 'Controle Diário');
     const form = page.locator('form').filter({
-      has: page.getByRole('button', { name: /^Salvar Atendimento/ }),
+      has: page.getByTestId('button-save-attendance'),
     });
     await form.getByTestId('input-attendance-client-name').fill(client);
-    await form.locator('select').nth(1).selectOption({ index: 1 });
+    await form.getByTestId('select-attendance-service').selectOption({ label: 'Barbearia' });
+    const professional = form.getByTestId('select-attendance-professional');
+    await professional.selectOption({ label: 'Profissional operacional E2E' });
     await form.getByTestId('input-attendance-service-value').fill('50');
     for (const product of products) {
       await form.getByRole('button', { name: 'Adicionar Produto', exact: true }).click();
@@ -295,7 +298,9 @@ test.describe('CRUD dos módulos de negócio', () => {
     let dialog = page.getByRole('dialog');
     await dialog.locator('input').nth(0).fill(name);
     await dialog.locator('input').nth(1).fill('99');
-    await dialog.locator('input').nth(2).fill('4 cortes');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
+    await dialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-uses-0').fill('4');
     await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     await settleMutation(page);
@@ -478,6 +483,96 @@ test.describe('CRUD dos módulos de negócio', () => {
     await page.getByRole('alertdialog').getByRole('button', { name: 'Excluir', exact: true }).click();
   });
 
+  test('registra um atendimento inteiro usando apenas o teclado', async ({ page }) => {
+    await openModule(page, '/controle', 'Controle Diário');
+    const form = page.locator('form').filter({
+      has: page.getByTestId('button-save-attendance'),
+    });
+    const tabTo = async (target: Locator) => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (await target.evaluate(element => element === element.ownerDocument.activeElement)) return;
+        await page.keyboard.press('Tab');
+      }
+      throw new Error(`Não foi possível alcançar ${await target.getAttribute('data-testid') ?? 'o controle'} usando Tab.`);
+    };
+    const typeIntoFocused = async (target: Locator, value: string) => {
+      await tabTo(target);
+      await expect(target).toBeFocused();
+      await page.keyboard.press('Control+A');
+      await page.keyboard.type(value);
+    };
+    const selectWithKeyboard = async (target: Locator, label: string) => {
+      await tabTo(target);
+      const options = await target.locator('option').evaluateAll(items => items.map(option => ({
+        label: option.textContent?.trim() ?? '',
+        value: (option as { value: string }).value,
+      })));
+      const optionIndex = options.findIndex(option => option.label === label);
+      if (optionIndex < 0) throw new Error(`A opção ${label} não está disponível.`);
+      await page.keyboard.press('Home');
+      for (let index = 0; index < optionIndex; index += 1) {
+        await page.keyboard.press('ArrowDown');
+      }
+      await page.keyboard.press('Enter');
+      await expect(target).toHaveValue(options[optionIndex].value);
+    };
+
+    const clientName = uniqueName('Cliente teclado E2E');
+    const phone = `119${Date.now().toString().slice(-8)}`;
+    const anonymousCheckbox = form.getByTestId('checkbox-anonymous-attendance');
+    await tabTo(anonymousCheckbox);
+    await expect(anonymousCheckbox).toBeFocused();
+
+    await typeIntoFocused(form.getByTestId('input-attendance-client-name'), clientName);
+    await typeIntoFocused(form.getByTestId('input-attendance-client-phone'), phone);
+    await tabTo(form.getByTestId('input-attendance-client-birthday'));
+
+    const service = form.getByTestId('select-attendance-service');
+    await selectWithKeyboard(service, 'Barbearia');
+    await typeIntoFocused(form.getByTestId('input-attendance-service-description'), 'Atendimento lançado pelo teclado');
+    await selectWithKeyboard(
+      form.getByTestId('select-attendance-professional'),
+      'Profissional operacional E2E',
+    );
+    await typeIntoFocused(form.getByTestId('input-attendance-service-value'), '50');
+
+    const addProductButton = form.getByRole('button', { name: 'Adicionar Produto', exact: true });
+    await tabTo(addProductButton);
+    await expect(addProductButton).toBeFocused();
+    await page.keyboard.press('Enter');
+    const productSelect = form.getByTestId('select-attendance-product-0');
+    await expect(productSelect).toBeFocused();
+    await tabTo(form.getByRole('spinbutton', { name: 'Quantidade do produto 1' }));
+
+    await tabTo(form.getByTestId('select-attendance-payment-method'));
+    const addPaymentButton = form.getByRole('button', {
+      name: '+ Adicionar Forma de Pagamento',
+      exact: true,
+    });
+    await tabTo(addPaymentButton);
+    await expect(addPaymentButton).toBeFocused();
+    await page.keyboard.press('Enter');
+
+    const splitMethod = form.getByTestId('select-attendance-payment-split-0');
+    await expect(splitMethod).toBeFocused();
+    const splitAmount = form.getByLabel('Valor da forma 1');
+    await typeIntoFocused(splitAmount, '50');
+    await typeIntoFocused(form.getByTestId('input-attendance-notes'), 'Registrado sem usar o mouse.');
+
+    const saveButton = form.getByTestId('button-save-attendance');
+    await tabTo(saveButton);
+    await expect(saveButton).toBeFocused();
+    const focusRing = await saveButton.evaluate(element =>
+      element.ownerDocument.defaultView?.getComputedStyle(element).boxShadow ?? '',
+    );
+    expect(focusRing).not.toBe('none');
+
+    const appointmentCreate = waitForMutation(page, 'appointments', 'POST');
+    await page.keyboard.press('Enter');
+    await appointmentCreate;
+    await expect(page.getByRole('row').filter({ hasText: clientName })).toBeVisible();
+  });
+
   test('reutiliza o cliente quando o telefone já está cadastrado e mantém as visitas vinculadas', async ({ page }) => {
     const clientName = uniqueName('Cliente pelo atendimento');
     const secondEnteredName = uniqueName('Nome alternativo');
@@ -485,7 +580,7 @@ test.describe('CRUD dos módulos de negócio', () => {
 
     await openModule(page, '/controle', 'Controle Diário');
     const form = page.locator('form').filter({
-      has: page.getByRole('button', { name: /^Salvar Atendimento/ }),
+      has: page.getByTestId('button-save-attendance'),
     });
     const fillAttendance = async (name: string) => {
       await form.getByTestId('input-attendance-client-name').fill(name);
@@ -497,7 +592,7 @@ test.describe('CRUD dos módulos de negócio', () => {
     await fillAttendance(clientName);
     const clientCreate = waitForRpcMutation(page, 'create_or_get_client_by_phone');
     const firstAppointment = waitForMutation(page, 'appointments', 'POST');
-    await form.getByRole('button', { name: /^Salvar Atendimento/ }).click();
+    await form.getByTestId('button-save-attendance').click();
     const [firstClientResponse, firstAppointmentResponse] = await Promise.all([clientCreate, firstAppointment]);
     const originalClient = await firstClientResponse.json() as { id: string };
     const originalAppointment = await firstAppointmentResponse.json() as { client_id: string };
@@ -608,38 +703,96 @@ test.describe('CRUD dos módulos de negócio', () => {
   });
 
   test('busca cliente por nome ou telefone e vincula atendimento e visita ao cadastro', async ({ page }) => {
-    const clientName = uniqueName('Cliente selecionado');
+    const uniqueClientSuffix = uniqueName('Cliente selecionado');
+    const clientName = `João ${uniqueClientSuffix}`;
     const phone = `119${Date.now().toString().slice(-8)}`;
+    const similarClientName = `Joao ${uniqueClientSuffix} parecido`;
+    const similarClientPhone = `118${Date.now().toString().slice(-8)}`;
 
     await openModule(page, '/clientes', 'Clientes');
     await page.getByRole('button', { name: 'Novo Cliente', exact: true }).click();
     const clientDialog = page.getByRole('dialog');
     await clientDialog.locator('input').nth(0).fill(clientName);
     await clientDialog.locator('input').nth(1).fill(phone);
-    await clientDialog.locator('input').nth(3).fill(`${clientName.replaceAll(' ', '').toLowerCase()}@example.com`);
+    await clientDialog.locator('input').nth(3).fill(`${uniqueClientSuffix.replaceAll(' ', '').toLowerCase()}@example.com`);
     const createClientResponse = waitForRpcMutation(page, 'create_or_get_client_by_phone');
     await clientDialog.getByRole('button', { name: 'Salvar Cliente', exact: true }).click();
     const createdClient = await (await createClientResponse).json() as { id: string };
 
+    await page.getByRole('button', { name: 'Novo Cliente', exact: true }).click();
+    const similarClientDialog = page.getByRole('dialog');
+    await similarClientDialog.locator('input').nth(0).fill(similarClientName);
+    await similarClientDialog.locator('input').nth(1).fill(similarClientPhone);
+    await similarClientDialog.locator('input').nth(3).fill(`${uniqueClientSuffix.replaceAll(' ', '').toLowerCase()}2@example.com`);
+    const createSimilarClientResponse = waitForRpcMutation(page, 'create_or_get_client_by_phone');
+    await similarClientDialog.getByRole('button', { name: 'Salvar Cliente', exact: true }).click();
+    const createdSimilarClient = await (await createSimilarClientResponse).json() as { id: string };
+    await settleMutation(page);
+
     await openModule(page, '/controle', 'Controle Diário');
     const form = page.locator('form').filter({
-      has: page.getByRole('button', { name: /^Salvar Atendimento/ }),
+      has: page.getByTestId('button-save-attendance'),
     });
-    const search = form.getByTestId('input-attendance-client-search');
-    await search.fill(clientName);
+    const nameInput = form.getByTestId('input-attendance-client-name');
+    const nameResults = form.getByTestId('attendance-client-results-name');
+    await nameInput.fill(`JOAO ${uniqueClientSuffix}`);
+    await expect(nameResults).toBeVisible();
+    await expect(nameResults.getByTestId(`button-select-attendance-client-${createdClient.id}`)).toBeVisible();
+    await expect(nameResults.getByTestId(`button-select-attendance-client-${createdSimilarClient.id}`)).toBeVisible();
+    await expect(nameResults.locator('[role="option"]')).toHaveCount(2);
+
+    await nameInput.fill(`joão ${uniqueClientSuffix}`);
+    await expect(nameResults.locator('[role="option"]')).toHaveCount(2);
+    await expect(nameResults.getByTestId(`button-select-attendance-client-${createdClient.id}`)).toBeVisible();
+    await expect(nameResults.getByTestId(`button-select-attendance-client-${createdSimilarClient.id}`)).toBeVisible();
+
+    const firstNameOption = nameResults.getByRole('option').nth(0);
+    const secondNameOption = nameResults.getByRole('option').nth(1);
+    const firstNameOptionId = (await firstNameOption.getAttribute('id'))!;
+    const secondNameOptionId = (await secondNameOption.getAttribute('id'))!;
+    await nameInput.press('ArrowDown');
+    await expect(nameInput).toHaveAttribute('aria-activedescendant', firstNameOptionId);
+    await expect(firstNameOption).toHaveAttribute('aria-selected', 'true');
+    await nameInput.press('ArrowDown');
+    await expect(nameInput).toHaveAttribute('aria-activedescendant', secondNameOptionId);
+    await expect(secondNameOption).toHaveAttribute('aria-selected', 'true');
+    await nameInput.press('ArrowUp');
+    await expect(nameInput).toHaveAttribute('aria-activedescendant', firstNameOptionId);
+    await nameInput.press('Escape');
+    await expect(nameResults).toBeHidden();
+    await expect(nameInput).toHaveAttribute('aria-expanded', 'false');
+
+    await nameInput.fill(`JOAO ${uniqueClientSuffix}`);
+    await nameInput.press('ArrowDown');
+    const selectedName = (await firstNameOption.locator('span').first().textContent())?.trim();
+    await nameInput.press('Enter');
+    await expect(nameInput).toHaveValue(selectedName ?? '');
+    await expect(nameResults).toBeHidden();
+    await form.getByTestId('button-clear-attendance-client').click();
+
+    const phoneInput = form.getByTestId('input-attendance-client-phone');
+    await nameInput.fill('');
+    await phoneInput.fill(phone);
     const result = form.getByTestId(`button-select-attendance-client-${createdClient.id}`);
     await expect(result).toBeVisible();
-    await search.fill(phone);
-    await expect(result).toBeVisible();
-    await result.click();
-    await expect(form.getByTestId('input-attendance-client-name')).toHaveValue(clientName);
-    await expect(form.getByTestId('input-attendance-client-phone')).toHaveValue(phone);
-    await form.locator('select').nth(1).selectOption({ index: 1 });
+    await expect(form.getByTestId('attendance-client-results-phone').locator('[role="option"]')).toHaveCount(1);
+    await phoneInput.press('ArrowDown');
+    await expect(phoneInput).toHaveAttribute(
+      'aria-activedescendant',
+      `attendance-client-option-phone-${createdClient.id}`,
+    );
+    await phoneInput.press('Enter');
+    await expect(nameInput).toHaveValue(clientName);
+    await expect(phoneInput).toHaveValue(phone);
+    await form.getByTestId('select-attendance-service').selectOption({ label: 'Barbearia' });
+    await form.getByTestId('select-attendance-professional').selectOption({
+      label: 'Profissional operacional E2E',
+    });
     await form.getByTestId('input-attendance-service-value').fill('75');
 
     const clientVisitResponse = waitForMutation(page, 'clients', 'PATCH');
     const appointmentResponse = waitForMutation(page, 'appointments', 'POST');
-    await form.getByRole('button', { name: /^Salvar Atendimento/ }).click();
+    await form.getByTestId('button-save-attendance').click();
     const [visitResponse, savedAppointmentResponse] = await Promise.all([
       clientVisitResponse,
       appointmentResponse,
@@ -1027,7 +1180,7 @@ test.describe('CRUD dos módulos de negócio', () => {
   test('salva e recarrega configurações do estabelecimento', async ({ page }) => {
     const name = uniqueName('Barbearia E2E');
     await openModule(page, '/configuracoes', 'Configurações');
-    await page.getByPlaceholder('Ex: Barber Manager').fill(name);
+    await page.getByPlaceholder('Ex: Beauty Manager').fill(name);
     const settingsResponse = page.waitForResponse(response =>
       response.url().includes('/organization_settings') &&
       response.request().method() === 'POST' &&
@@ -1038,6 +1191,6 @@ test.describe('CRUD dos módulos de negócio', () => {
     await expect(page.getByText('Configurações salvas com sucesso.', { exact: true })).toBeVisible();
     await settleMutation(page);
     await page.reload();
-    await expect(page.getByPlaceholder('Ex: Barber Manager')).toHaveValue(name);
+    await expect(page.getByPlaceholder('Ex: Beauty Manager')).toHaveValue(name);
   });
 });

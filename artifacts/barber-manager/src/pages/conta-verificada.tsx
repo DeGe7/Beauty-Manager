@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
-import { BadgeCheck, CircleAlert, LoaderCircle, Scissors } from 'lucide-react';
+import { BadgeCheck, CircleAlert, LoaderCircle } from 'lucide-react';
 import { useAuth } from '@/auth/auth';
 import { supabase } from '@/services/supabaseClient';
+import { BrandMark } from '@/components/BrandMark';
 
 type ConfirmationState = 'checking' | 'verified' | 'error';
 
@@ -61,16 +62,14 @@ export default function ContaVerificada() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,hsl(var(--brand-gold)/0.12),transparent_48%)]" />
       <section
         aria-live="polite"
-        className="relative w-full max-w-md overflow-hidden rounded-3xl border border-brand-border bg-brand-surface shadow-2xl"
+        className="relative w-full max-w-md overflow-hidden rounded-2xl border border-brand-border bg-brand-surface shadow-2xl sm:rounded-3xl"
       >
-        <div className="border-b border-brand-border bg-brand-bg/30 px-7 py-8 text-center">
-          <div className="mb-4 inline-flex rounded-2xl border border-brand-gold/20 bg-brand-gold/10 p-3 text-brand-gold">
-            <Scissors aria-hidden="true" className="h-7 w-7" />
-          </div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Barber Manager</p>
+        <div className="border-b border-brand-border bg-brand-bg/30 px-5 py-6 text-center sm:px-7 sm:py-8">
+          <BrandMark className="mx-auto mb-4 h-14 w-14" />
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Beauty Manager</p>
         </div>
 
-        <div className="space-y-5 px-7 py-8 text-center sm:px-9">
+        <div className="space-y-5 px-5 py-6 text-center sm:px-9 sm:py-8">
           {state === 'checking' && (
             <>
               <LoaderCircle aria-hidden="true" className="mx-auto h-12 w-12 animate-spin text-brand-gold" />

@@ -78,7 +78,7 @@ function ThemePanel({ improved = false }: { improved?: boolean }) {
 
       <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
         <Scissors className="h-4 w-4 text-brand-gold" />
-        Barber Manager
+        Beauty Manager
       </div>
     </section>
   );
@@ -88,7 +88,7 @@ export function ThemeContrastComparison() {
   return (
     <main className="min-h-screen bg-[#f4f1eb] p-4 text-[#29251f] md:p-7">
       <header className="mx-auto mb-6 max-w-7xl">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#675c48]">Barber Manager</p>
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#675c48]">Beauty Manager</p>
         <h1 className="mt-1 text-2xl font-bold">Comparação do tema claro</h1>
         <p className="mt-2 max-w-3xl text-sm text-[#5c554a]">
           Mesmos componentes e dados. Compare a legibilidade dos textos, valores, limites dos campos e botão principal.

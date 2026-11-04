@@ -14,7 +14,7 @@ export function Proposed() {
           <div className="mx-auto mb-5 inline-flex rounded-xl border border-brand-gold/20 bg-brand-gold/10 p-4 text-brand-gold">
             <Scissors className="h-8 w-8" />
           </div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Barber Manager</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Beauty Manager</p>
           <h1 className="mt-2 text-2xl font-bold text-foreground">
             {step === 'welcome' ? 'Convite para a equipe' : 'Criar seu acesso'}
           </h1>

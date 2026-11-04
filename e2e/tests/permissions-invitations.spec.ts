@@ -408,13 +408,15 @@ test.describe('visibilidade e restrições por papel', () => {
     await openModule(page, '/dashboard', 'Visão geral');
 
     const sidebar = page.getByRole('complementary');
+    await expect(page.getByTestId('reception-daily-operations')).toBeVisible();
+    await expect(page.getByTestId('payment-method-summary-card')).toHaveCount(0);
+    await expect(page.getByTestId('reception-daily-operations-error')).toHaveCount(0);
     for (const label of [
       'Controle Diário',
       'Agenda',
       'Clientes',
       'Produtos & Estoque',
       'Planos & Mensalidades',
-      'Disparos de Mensagens',
     ]) {
       await expect(sidebar.getByRole('link', { name: label, exact: true })).toBeVisible();
     }
@@ -422,11 +424,11 @@ test.describe('visibilidade e restrições por papel', () => {
       await expect(sidebar.getByRole('link', { name: label, exact: true })).toHaveCount(0);
     }
 
-    for (const path of ['/profissionais', '/financeiro', '/configuracoes']) {
+    for (const path of ['/profissionais', '/financeiro', '/configuracoes', '/comunicacao']) {
       await page.goto(path);
       await expect(page.getByRole('heading', { name: 'Acesso Restrito', exact: true })).toBeVisible();
     }
-    for (const path of ['/agenda', '/clientes', '/produtos', '/planos', '/comunicacao']) {
+    for (const path of ['/agenda', '/clientes', '/produtos', '/planos']) {
       await page.goto(path);
       await expect(page.getByRole('heading', { name: 'Acesso Restrito', exact: true })).toHaveCount(0);
       await expect(page.locator('main')).toBeVisible();
@@ -434,7 +436,7 @@ test.describe('visibilidade e restrições por papel', () => {
     }
 
     await openModule(page, '/controle', 'Controle Diário');
-    await page.getByTestId('input-attendance-client-search').fill('Cliente recepção E2E');
+    await page.getByTestId('input-attendance-client-name').fill('Cliente recepção E2E');
     await page.getByTestId(`button-select-attendance-client-${fixture!.clientId}`).click();
     await page.getByTestId('select-attendance-professional').selectOption(fixture!.professionalId);
     await page.getByTestId('input-attendance-service-value').fill('50');
@@ -461,7 +463,7 @@ test.describe('visibilidade e restrições por papel', () => {
       response.request().method() === 'POST' &&
       response.ok(),
     );
-    await page.getByRole('button', { name: /Salvar Atendimento/ }).click();
+    await page.getByRole('button', { name: /Salvar atendimento/i }).click();
 
     const [stockResponse, clientResponse, appointmentResponse] = await Promise.all([
       stockResponsePromise,
@@ -478,7 +480,8 @@ test.describe('visibilidade e restrições por papel', () => {
     expect(savedAppointment.products).toEqual([{ productId: fixture!.productId, quantity: 2 }]);
     await expect(page.getByRole('heading', { name: 'Atendimentos de hoje', exact: true })).toBeVisible();
     await expect(page.getByText('Cliente recepção E2E')).toBeVisible();
-    await expect(page.getByText('Profissional operacional E2E')).toBeVisible();
+    const recordedReceptionAttendance = page.getByRole('article').filter({ hasText: 'Cliente recepção E2E' });
+    await expect(recordedReceptionAttendance).toContainText('Profissional operacional E2E');
   });
 
   test('papel customizado respeita o módulo permitido e bloqueia o módulo removido', async ({ page }) => {

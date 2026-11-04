@@ -75,8 +75,8 @@ export default function Onboarding() {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-brand-bg p-6 flex flex-col items-center justify-center">
-      <div className="max-w-xl w-full space-y-8">
+    <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-brand-bg px-4 py-8 sm:p-6">
+      <div className="w-full max-w-xl space-y-6 sm:space-y-8">
         {accessError && (
           <p role="alert" className="rounded-xl border border-brand-border bg-brand-surface p-4 text-sm text-foreground">
             {accessError}
@@ -105,7 +105,7 @@ export default function Onboarding() {
              Verificando as opções de entrada...
            </div>
          ) : options.canCreateOrganization ? (
-           <form onSubmit={handleSubmit} className="rounded-2xl border border-brand-border bg-brand-surface p-6 md:p-8 space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-5 rounded-2xl border border-brand-border bg-brand-surface p-5 sm:space-y-6 sm:p-6 md:p-8">
             <div>
               <label htmlFor="organization-name" className="block text-sm font-semibold mb-2">Nome do estabelecimento</label>
               <input
@@ -135,7 +135,7 @@ export default function Onboarding() {
             </button>
           </form>
          ) : options.canRequestAccess ? (
-           <section className="rounded-2xl border border-brand-gold/30 bg-brand-surface p-6 md:p-8">
+            <section className="rounded-2xl border border-brand-gold/30 bg-brand-surface p-5 sm:p-6 md:p-8">
              <div className="flex items-start gap-3">
                <UserRoundCheck className="mt-0.5 h-5 w-5 shrink-0 text-brand-gold" />
                <div>
@@ -161,7 +161,7 @@ export default function Onboarding() {
            <span className="h-px flex-1 bg-brand-border" />
          </div>
 
-         <form onSubmit={handleAcceptInvitation} className="rounded-2xl border border-brand-gold/30 bg-brand-surface p-6 md:p-8 space-y-5">
+          <form onSubmit={handleAcceptInvitation} className="space-y-5 rounded-2xl border border-brand-gold/30 bg-brand-surface p-5 sm:p-6 md:p-8">
            <div className="flex items-start gap-3">
              <LinkIcon className="mt-0.5 h-5 w-5 shrink-0 text-brand-gold" />
              <div>

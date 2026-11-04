@@ -112,7 +112,7 @@ export function Layout({ children }: LayoutProps) {
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .slice(0, 4);
   const currentNav = navItems.find((n) => location === n.path || (n.path !== '/' && location.startsWith(n.path)));
-  const pageTitle = location === '/perfil' ? 'Meu Perfil' : currentNav?.label || 'Barber Manager';
+  const pageTitle = location === '/perfil' ? 'Meu Perfil' : currentNav?.label || 'Beauty Manager';
 
   const handleLogout = () => {
     signOut().then(() => {
@@ -144,7 +144,7 @@ export function Layout({ children }: LayoutProps) {
         >
           <Scissors className="w-5 h-5" />
         </button>
-        {!collapsed && <span className="font-bold text-lg text-foreground truncate uppercase tracking-wide">{store.config.name || 'Barber Manager'}</span>}
+        {!collapsed && <span className="font-bold text-lg text-foreground truncate uppercase tracking-wide">{store.config.name || 'Beauty Manager'}</span>}
       </div>
 
       <div className={`flex-1 overflow-y-auto py-6 ${collapsed ? 'px-2' : 'px-4'} space-y-1.5 bg-brand-surface`}>

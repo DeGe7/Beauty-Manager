@@ -49,7 +49,9 @@ test.describe('mensalidades presenciais', () => {
     let dialog = page.getByRole('dialog');
     await dialog.locator('input').nth(0).fill(planName);
     await dialog.locator('input').nth(1).fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
     await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
+    await dialog.getByRole('combobox').nth(1).selectOption({ index: 1 });
     await dialog.locator('input').nth(2).fill('4');
     await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
     await expect(page.getByText(planName, { exact: true }).first()).toBeVisible();
@@ -87,6 +89,170 @@ test.describe('mensalidades presenciais', () => {
     expect(clientCreateRequests).toBe(1);
   });
 
+  test('atribui plano no Controle Diário e só libera usos após confirmar pagamento', async ({ page }) => {
+    const planName = uniqueName('Plano atribuído no controle E2E');
+    const clientName = uniqueName('Cliente do controle E2E');
+    const phone = uniqueClientPhone();
+
+    await openModule(page, '/planos', 'Planos Disponíveis');
+    await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.locator('input').nth(0).fill(planName);
+    await dialog.locator('input').nth(1).fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
+    await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
+    await dialog.getByRole('combobox').nth(1).selectOption({ index: 1 });
+    await dialog.locator('input').nth(2).fill('4');
+    await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
+    await expect(page.getByText(planName, { exact: true }).first()).toBeVisible();
+
+    await openModule(page, '/controle', 'Controle Diário');
+    const form = page.locator('form').filter({ has: page.getByTestId('button-save-attendance') });
+    await form.getByTestId('input-attendance-client-name').fill(clientName);
+    await form.getByTestId('input-attendance-client-phone').fill(phone);
+    await form.getByRole('button', { name: 'Atribuir plano neste registro' }).click();
+    const assignmentPlanSelect = form.getByTestId('select-assign-plan');
+    const assignmentPlanOption = assignmentPlanSelect.locator('option').filter({ hasText: planName }).first();
+    await assignmentPlanSelect.selectOption((await assignmentPlanOption.getAttribute('value'))!);
+    const createSubscriber = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/subscribers') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-assign-plan').click();
+    await createSubscriber;
+    await expect(form.getByTestId('select-attendance-plan')).not.toContainText(clientName);
+
+    await form.getByRole('button', { name: 'Atribuir plano neste registro' }).click();
+    const paymentPlanSelect = form.getByTestId('select-assign-plan');
+    const paymentPlanOption = paymentPlanSelect.locator('option').filter({ hasText: planName }).first();
+    await paymentPlanSelect.selectOption((await paymentPlanOption.getAttribute('value'))!);
+    await form.getByLabel('O cliente já pagou a mensalidade').check();
+    const recordPayment = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/rpc/set_subscription_payment_status') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-assign-plan').click();
+    await recordPayment;
+    const planForAttendance = form.getByTestId('select-attendance-plan');
+    await expect(planForAttendance.locator('option').filter({ hasText: clientName })).toHaveCount(1);
+    const subscriberId = await planForAttendance.locator('option').filter({ hasText: clientName }).getAttribute('value');
+    expect(subscriberId).toBeTruthy();
+
+    const professionalSelect = form.getByTestId('select-attendance-professional');
+    const professionalId = await professionalSelect.locator('option').evaluateAll(options =>
+      options.find(option => Boolean(option.getAttribute('value')))?.getAttribute('value'),
+    );
+    expect(professionalId).toBeTruthy();
+    await professionalSelect.selectOption(professionalId!);
+    await form.getByTestId('input-attendance-service-description').fill('Atendimento do plano');
+
+    const createAppointment = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/appointments') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-save-attendance').click();
+    const appointmentResponse = await createAppointment;
+    const appointment = await appointmentResponse.json() as {
+      plan_subscriber_id: string | null;
+      professional_id: string;
+      service_id: string | null;
+      service_description: string | null;
+      plan_usage_value: number;
+      service_commission_rate_snapshot: number;
+      value: number;
+    };
+    expect(appointment.plan_subscriber_id).toBe(subscriberId);
+    expect(appointment.professional_id).toBe(professionalId);
+    expect(appointment.service_id).toBeTruthy();
+    expect(appointment.service_description).toBe('Atendimento do plano');
+    expect(appointment.plan_usage_value).toBe(18.63);
+    expect(appointment.service_commission_rate_snapshot).toBe(1);
+    expect(appointment.value).toBe(0);
+  });
+
+  test('mostra recebimentos pagos no dashboard, financeiro e controle diário', async ({ page }) => {
+    const planName = uniqueName('Plano recebimentos E2E');
+    const paidSubscriber = uniqueName('Assinante pago nos relatórios E2E');
+    const pendingSubscriber = uniqueName('Assinante pendente nos relatórios E2E');
+
+    await openModule(page, '/planos', 'Planos Disponíveis');
+    await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.locator('input').nth(0).fill(planName);
+    await dialog.locator('input').nth(1).fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
+    await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
+    await dialog.getByRole('combobox').nth(1).selectOption({ index: 1 });
+    await dialog.locator('input').nth(2).fill('4');
+    await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
+    await expect(page.getByText(planName, { exact: true }).first()).toBeVisible();
+    await settleMutation(page);
+
+    async function createSubscriber(name: string) {
+      await page.getByRole('button', { name: 'Adicionar Assinante', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByTestId('input-subscriber-client-name').fill(name);
+      await dialog.getByTestId('input-subscriber-client-phone').fill(uniqueClientPhone());
+      await dialog.locator('select').nth(0).selectOption({ label: planName });
+      await dialog.locator('input[type="date"]').fill(today());
+      await dialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
+      const row = page.locator('tbody tr').filter({ hasText: name });
+      await expect(row).toBeVisible();
+      await settleMutation(page);
+      return row;
+    }
+
+    async function registerPayment(
+      row: ReturnType<typeof page.locator>,
+      name: string,
+      status: 'pago' | 'pendente',
+    ) {
+      await row.getByRole('button', { name: `Registrar mensalidade de ${name}`, exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.locator('select').nth(0).selectOption(status);
+      await dialog.locator('input[type="number"]').fill('149');
+      if (status === 'pago') {
+        await dialog.locator('input[type="date"]').nth(1).fill(today());
+        await dialog.locator('select').nth(1).selectOption('pix');
+      }
+      await dialog.locator('textarea').fill(`E2E ${status}`);
+      const response = page.waitForResponse(response =>
+        response.url().includes('/rest/v1/rpc/set_subscription_payment_status') &&
+        response.request().method() === 'POST' &&
+        response.ok(),
+      );
+      await dialog.getByRole('button', { name: 'Salvar controle presencial', exact: true }).click();
+      await response;
+      await expect(dialog).toBeHidden();
+    }
+
+    const paidRow = await createSubscriber(paidSubscriber);
+    await registerPayment(paidRow, paidSubscriber, 'pago');
+    const pendingRow = await createSubscriber(pendingSubscriber);
+    await registerPayment(pendingRow, pendingSubscriber, 'pendente');
+
+    await openModule(page, '/dashboard', 'Visão geral');
+    const dashboardReceipts = page.getByTestId('dashboard-plan-receipts');
+    await expect(dashboardReceipts).toContainText(paidSubscriber);
+    await expect(dashboardReceipts).toContainText('149,00');
+    await expect(dashboardReceipts).not.toContainText(pendingSubscriber);
+
+    await openModule(page, '/financeiro', 'Financeiro');
+    const financeReceipts = page.getByTestId('finance-plan-receipts');
+    await expect(financeReceipts.getByTestId('finance-plan-receipt').filter({ hasText: paidSubscriber })).toBeVisible();
+    await expect(financeReceipts).toContainText('PIX');
+    await expect(financeReceipts).not.toContainText(pendingSubscriber);
+
+    await openModule(page, '/controle', 'Controle Diário');
+    const paidMovement = page.getByTestId('daily-subscription-movement').filter({ hasText: paidSubscriber }).first();
+    await expect(paidMovement).toBeVisible();
+    await expect(paidMovement).toContainText('149,00');
+    await expect(page.getByTestId('daily-subscription-movement').filter({ hasText: pendingSubscriber })).toHaveCount(0);
+  });
+
   test('mantém pagamentos, vencimento e estados após recarregar', async ({ page }) => {
     const planName = uniqueName('Plano mensalidade E2E');
     const paidSubscriber = uniqueName('Assinante pago E2E');
@@ -103,7 +269,9 @@ test.describe('mensalidades presenciais', () => {
     let dialog = page.getByRole('dialog');
     await dialog.locator('input').nth(0).fill(planName);
     await dialog.locator('input').nth(1).fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
     await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
+    await dialog.getByRole('combobox').nth(1).selectOption({ index: 1 });
     await dialog.locator('input').nth(2).fill('4');
     await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
     await expect(page.getByText(planName, { exact: true }).first()).toBeVisible();
@@ -321,9 +489,10 @@ test.describe('mensalidades presenciais', () => {
       const dialog = page.getByRole('dialog');
       await dialog.locator('input').nth(0).fill(name);
       await dialog.locator('input').nth(1).fill('149');
-      await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
+      await dialog.getByTestId('plan-salon-share-percent').fill('50');
+      await dialog.getByRole('combobox').nth(0).selectOption({ label: duration });
       await dialog.locator('input').nth(2).fill('4');
-      await dialog.getByRole('combobox').nth(1).selectOption({ label: duration });
+      await dialog.getByRole('combobox').nth(1).selectOption({ index: 1 });
       await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
       await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
       await settleMutation(page);
@@ -467,9 +636,10 @@ test.describe('mensalidades presenciais', () => {
       const dialog = page.getByRole('dialog');
       await dialog.locator('input').nth(0).fill(name);
       await dialog.locator('input').nth(1).fill('149');
-      await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
+      await dialog.getByTestId('plan-salon-share-percent').fill('50');
+      await dialog.getByRole('combobox').nth(0).selectOption({ label: duration });
       await dialog.locator('input').nth(2).fill('4');
-      await dialog.getByRole('combobox').nth(1).selectOption({ label: duration });
+      await dialog.getByRole('combobox').nth(1).selectOption({ index: 1 });
       await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
       await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
       await settleMutation(page);

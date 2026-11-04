@@ -3,8 +3,8 @@ import { Link, useLocation } from 'wouter';
 import { useAuth } from '@/auth/auth';
 import CaptchaChallenge, { captchaRequired } from '@/auth/captcha';
 import { isAuthRateLimitError, useAuthRateLimit } from '@/auth/rate-limit';
-import { Scissors } from 'lucide-react';
 import { toast } from 'sonner';
+import { BrandMark } from '@/components/BrandMark';
 
 export default function Login() {
   const [, setLocation] = useLocation();
@@ -56,9 +56,9 @@ export default function Login() {
 
   if (isLegacyPhoneInvitation) {
     return (
-      <main className="flex min-h-[100dvh] items-center justify-center bg-brand-bg p-4">
-        <section className="w-full max-w-md space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-8 text-center shadow-2xl">
-          <Scissors className="mx-auto h-10 w-10 text-brand-gold" />
+      <main className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
+        <section className="w-full max-w-md space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-5 text-center shadow-2xl sm:p-8">
+          <BrandMark className="mx-auto h-12 w-12" />
           <h1 className="text-2xl font-bold text-foreground">Convite por telefone desativado</h1>
           <p className="text-sm leading-relaxed text-muted-foreground">
             Peça ao Gestor/Proprietário para gerar um novo convite usando seu e-mail.
@@ -72,20 +72,18 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-[100dvh] flex items-center justify-center bg-brand-bg p-4 relative overflow-hidden">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-brand-bg px-4 py-8">
       {/* Background glow */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-brand-gold/5 rounded-full blur-[100px] pointer-events-none" />
 
       <div className="w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl shadow-2xl overflow-hidden flex flex-col relative z-10">
-        <div className="p-8 text-center border-b border-brand-border bg-brand-bg/30">
-          <div className="inline-flex items-center justify-center p-4 rounded-xl bg-brand-gold/10 text-brand-gold mb-5 border border-brand-gold/20">
-            <Scissors className="w-8 h-8" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground">Barber Manager</h1>
+        <div className="border-b border-brand-border bg-brand-bg/30 p-5 text-center sm:p-8">
+          <BrandMark className="mx-auto mb-5 h-16 w-16" />
+          <h1 className="text-2xl font-bold text-foreground">Beauty Manager</h1>
           <p className="text-sm text-muted-foreground mt-2">Sistema profissional de gestão</p>
         </div>
         
-        <div className="p-6">
+        <div className="p-5 sm:p-6">
           <form onSubmit={handleSubmit} className="space-y-4">
             {inviteToken && (
               <div className="rounded-lg border border-brand-gold/30 bg-brand-gold/10 p-3 text-sm text-brand-gold">

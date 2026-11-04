@@ -16,6 +16,7 @@ type HistoryModuleId =
   | 'team_access';
 
 type HistoryCounts = Record<string, number>;
+const CLEANUP_CONFIRMATION = 'EXCLUIR';
 
 const MODULES: {
   id: HistoryModuleId;
@@ -36,9 +37,9 @@ const MODULES: {
   {
     id: 'appointments',
     title: 'Agenda e atendimentos',
-    description: 'Remove agendamentos permitidos pela regra atual e tenta restaurar o estoque e limpar o Google Agenda.',
+    description: 'Remove agendamentos permitidos pela regra atual, preservando uma cópia restrita do atendimento para recuperação.',
     counts: ['appointments'],
-    warning: 'A Recepção e os profissionais mantêm o limite de 24 horas. Gestor/Proprietário e DEV/ADMIN podem excluir atendimentos antigos. Falhas de estoque ou Google Agenda serão informadas.',
+    warning: 'A Recepção e os profissionais mantêm o limite de 24 horas. Gestor/Proprietário e DEV/ADMIN podem excluir atendimentos antigos. O atendimento excluído será arquivado; falhas de estoque ou Google Agenda serão informadas.',
     icon: CalendarDays,
   },
   {
@@ -109,6 +110,7 @@ export default function HistoryCleanup() {
   const [isClearing, setIsClearing] = useState(false);
   const [selectedModules, setSelectedModules] = useState<HistoryModuleId[]>([]);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [confirmationText, setConfirmationText] = useState('');
 
   const lockedAppointments = useMemo(
     () => appointments.filter(appointment => isLockedAttendance(appointment, session?.role)).length,
@@ -162,7 +164,11 @@ export default function HistoryCleanup() {
   };
 
   const confirmClear = async () => {
-    if (!selectedModules.length || isClearing) return;
+    if (
+      !selectedModules.length
+      || isClearing
+      || confirmationText.trim().toLocaleUpperCase('pt-BR') !== CLEANUP_CONFIRMATION
+    ) return;
     setIsClearing(true);
     setIsConfirmOpen(false);
     let totalDeleted = 0;
@@ -179,6 +185,7 @@ export default function HistoryCleanup() {
       }
       toast.success(`${totalDeleted} registro(s) removido(s).`);
       setSelectedModules([]);
+      setConfirmationText('');
       if (databaseChanged) {
         window.setTimeout(() => window.location.reload(), 500);
         return;
@@ -245,7 +252,10 @@ export default function HistoryCleanup() {
         <p className="text-xs text-muted-foreground">A exclusão individual continua disponível nas telas de cada módulo.</p>
         <button
           type="button"
-          onClick={() => setIsConfirmOpen(true)}
+          onClick={() => {
+            setConfirmationText('');
+            setIsConfirmOpen(true);
+          }}
           disabled={!selectedModules.length || isLoading || isClearing || selectedTotal === 0}
           className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-destructive px-4 py-2 text-sm font-bold text-white hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -256,7 +266,10 @@ export default function HistoryCleanup() {
 
       {isConfirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation" onMouseDown={event => {
-          if (event.target === event.currentTarget && !isClearing) setIsConfirmOpen(false);
+          if (event.target === event.currentTarget && !isClearing) {
+            setIsConfirmOpen(false);
+            setConfirmationText('');
+          }
         }}>
           <div role="alertdialog" aria-modal="true" aria-labelledby="history-cleanup-title" className="w-full max-w-lg space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-6 shadow-xl">
             <div className="flex items-start gap-3">
@@ -274,9 +287,42 @@ export default function HistoryCleanup() {
                 </li>
               ))}
             </ul>
+            <div className="space-y-2">
+              <label htmlFor="history-cleanup-confirmation" className="block text-sm font-semibold text-foreground">
+                Digite <span className="font-mono text-destructive">{CLEANUP_CONFIRMATION}</span> para confirmar
+              </label>
+              <input
+                id="history-cleanup-confirmation"
+                value={confirmationText}
+                onChange={event => setConfirmationText(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                className="min-h-11 w-full rounded-lg border border-brand-border bg-brand-bg px-3 py-2 text-sm text-foreground outline-none focus:border-destructive"
+                placeholder={CLEANUP_CONFIRMATION}
+              />
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Outros históricos selecionados podem ser permanentes. Os atendimentos apagados serão guardados em um arquivo restrito.
+              </p>
+            </div>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setIsConfirmOpen(false)} className="min-h-10 rounded-lg border border-brand-border px-4 py-2 text-sm font-semibold text-foreground hover:border-brand-gold">Cancelar</button>
-              <button type="button" onClick={() => void confirmClear()} disabled={isClearing} className="min-h-10 rounded-lg bg-destructive px-4 py-2 text-sm font-bold text-white hover:bg-destructive/90 disabled:opacity-50">Excluir registros</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsConfirmOpen(false);
+                  setConfirmationText('');
+                }}
+                className="min-h-10 rounded-lg border border-brand-border px-4 py-2 text-sm font-semibold text-foreground hover:border-brand-gold"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmClear()}
+                disabled={isClearing || confirmationText.trim().toLocaleUpperCase('pt-BR') !== CLEANUP_CONFIRMATION}
+                className="min-h-10 rounded-lg bg-destructive px-4 py-2 text-sm font-bold text-white hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isClearing ? 'Excluindo…' : 'Confirmar exclusão'}
+              </button>
             </div>
           </div>
         </div>

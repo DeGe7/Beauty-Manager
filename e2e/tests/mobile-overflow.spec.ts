@@ -207,7 +207,7 @@ async function expectControlsInsideCard(card: TestLocator, controls: TestLocator
 }
 
 test.describe('textos e ações nos cartões de celular', () => {
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`quebra nomes e descrições sem esconder ações em ${width}px`, async ({ page }) => {
       if (!accounts.manager) {
         test.skip(true, 'Requires an E2E manager account or E2E provisioning.');
@@ -329,11 +329,12 @@ test.describe('textos e ações nos cartões de celular', () => {
       const planDialog = page.getByRole('dialog');
       await expectDialogStateWithinViewport(page, planDialog, `${width}px /planos com formulário aberto`);
       const planName = uniqueName(`Plano com nome longo ${longWord}`);
-      const serviceDescription = `Descrição do serviço ${longWord} com informações que devem continuar legíveis`;
       const planInputs = planDialog.locator('input');
       await planInputs.nth(0).fill(planName);
       await planInputs.nth(1).fill('99');
-      await planInputs.nth(2).fill(serviceDescription);
+      await planDialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+      await planDialog.getByTestId('plan-service-uses-0').fill('1');
+      await planDialog.getByTestId('plan-salon-share-percent').fill('50');
       const createPlan = waitForMutation(page, 'subscription_plans', 'POST');
       await planDialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
       await createPlan;
@@ -405,7 +406,7 @@ test.describe('textos e ações nos cartões de celular', () => {
 });
 
 test.describe('nomes longos nas abas de clientes no celular', () => {
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`mantém nomes e ações legíveis nas abas filtradas em ${width}px`, async ({ page }) => {
       test.setTimeout(120_000);
       if (!accounts.manager) {
@@ -476,7 +477,7 @@ test.describe('nomes longos nas abas de clientes no celular', () => {
 });
 
 test.describe('formulários principais em janelas de celular', () => {
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`mantém controle, agenda e profissionais dentro da tela em ${width}px`, async ({ page }) => {
       test.setTimeout(90_000);
       if (!accounts.manager) {
@@ -520,7 +521,7 @@ test.describe('formulários principais em janelas de celular', () => {
 test.describe('rolagem horizontal nas demais telas autenticadas', () => {
   const excludedRoutes = new Set(['/clientes', '/produtos', '/planos']);
 
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`mantém as rotas acessíveis dentro da tela em ${width}px`, async ({ page }) => {
       test.setTimeout(180_000);
       if (!accounts.manager) {

@@ -90,37 +90,45 @@ function MainRouter() {
   // Public/Unwrapped routes
   if (location === '/login' || location === '/cadastro' || isPasswordRecoveryRoute || isAccountConfirmationRoute) {
     return (
-      <Switch>
-        <Route path="/login" component={Login} />
-        <Route path="/cadastro" component={Cadastro} />
-        <Route path="/conta-verificada" component={ContaVerificada} />
-        <Route path="/esqueci-senha" component={EsqueciSenha} />
-        <Route path="/redefinir-senha" component={RedefinirSenha} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/login" component={Login} />
+          <Route path="/cadastro" component={Cadastro} />
+          <Route path="/conta-verificada" component={ContaVerificada} />
+          <Route path="/esqueci-senha" component={EsqueciSenha} />
+          <Route path="/redefinir-senha" component={RedefinirSenha} />
+        </Switch>
+      </PageTransition>
     );
   }
 
   if (location === '/onboarding') {
     return (
-      <Switch>
-        <Route path="/onboarding" component={Onboarding} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/onboarding" component={Onboarding} />
+        </Switch>
+      </PageTransition>
     );
   }
 
   if (isJoinRequestRoute) {
     return (
-      <Switch>
-        <Route path="/solicitar-acesso" component={SolicitarAcesso} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/solicitar-acesso" component={SolicitarAcesso} />
+        </Switch>
+      </PageTransition>
     );
   }
 
   if (isInviteRoute) {
     return (
-      <Switch>
-        <Route path="/convite/:token" component={Convite} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/convite/:token" component={Convite} />
+        </Switch>
+      </PageTransition>
     );
   }
 
