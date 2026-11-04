@@ -13,6 +13,7 @@ import {
   OrganizationJoinRequestEventType,
 } from '@/data/api';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -723,8 +724,10 @@ export default function Profissionais() {
               
               <div className="flex items-center justify-between p-4 bg-brand-bg border border-brand-border rounded-lg">
                 <div>
-                  <p className="font-bold text-sm">Status do Profissional</p>
-                  <p className="text-xs text-muted-foreground">Inativar esconde da agenda, mas mantém o histórico.</p>
+                  <div className="flex items-center gap-1">
+                    <p className="font-bold text-sm">Status do Profissional</p>
+                    <FeatureInfo label="Status do profissional">Inativar remove a pessoa da agenda, mas mantém seu histórico e registros.</FeatureInfo>
+                  </div>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input type="checkbox" checked={form.isActive} onChange={e => setForm(f => ({...f, isActive: e.target.checked}))} className="sr-only peer" />
@@ -1149,7 +1152,7 @@ export default function Profissionais() {
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <h3 className="font-bold text-foreground">Histórico de convites da equipe</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Novos convites são por e-mail e expiram em até 30 dias. Convites antigos por telefone podem ser revogados ou removidos.</p>
+              <FeatureInfo label="Histórico de convites">Novos convites são enviados por e-mail e expiram em até 30 dias. Convites antigos por telefone podem ser revogados ou removidos.</FeatureInfo>
             </div>
             <div className="flex items-center gap-2">
               {cleanableInvitations.length > 0 && (
@@ -1460,7 +1463,7 @@ export default function Profissionais() {
                   <Mail className="h-4 w-4" /> {inviteSendLoading ? 'Enviando...' : 'Tentar enviar novamente'}
                 </button>
               )}
-              <p className="text-xs text-muted-foreground">Se o envio automático falhar, você ainda pode copiar e compartilhar o link do convite.</p>
+              <FeatureInfo label="Compartilhar convite">Se o envio automático falhar, copie e compartilhe o link do convite manualmente.</FeatureInfo>
               <button type="button" onClick={() => setInviteOpen(false)} className="w-full rounded-lg border border-brand-border py-3 text-sm font-semibold hover:border-brand-gold hover:text-brand-gold">Fechar</button>
             </div>
           )}
