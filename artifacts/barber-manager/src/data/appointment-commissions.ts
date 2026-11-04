@@ -92,11 +92,18 @@ export function manualCommissionAllocationMatches(
   serviceValue: number,
   assignments: Array<{ professionalId: string; amount: number }>,
 ): boolean {
+  return manualCommissionAllocationMatchesTarget(professionalCommissionPool(serviceValue), assignments);
+}
+
+export function manualCommissionAllocationMatchesTarget(
+  targetAmount: number,
+  assignments: Array<{ professionalId: string; amount: number }>,
+): boolean {
   const totalCents = assignments.reduce((sum, assignment) => {
     if (!Number.isFinite(assignment.amount) || assignment.amount < 0) return Number.NaN;
     return sum + Math.round((assignment.amount + Number.EPSILON) * 100);
   }, 0);
-  return totalCents === Math.round((professionalCommissionPool(serviceValue) + Number.EPSILON) * 100);
+  return totalCents === Math.round((targetAmount + Number.EPSILON) * 100);
 }
 
 export function prosthesisCommissionForProfessional(
