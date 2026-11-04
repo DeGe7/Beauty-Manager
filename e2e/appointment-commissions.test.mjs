@@ -7,11 +7,20 @@ import {
   clampManualCommissionAmount,
   manualCommissionAmountLimit,
   manualCommissionAllocationMatches,
+  manualCommissionAllocationMatchesTarget,
   professionalCommissionPool,
   prosthesisCommissionForProfessional,
   prosthesisProductCost,
 } from '../artifacts/barber-manager/src/data/appointment-commissions.ts';
-import { planValuePerUse, subscriberServiceUsesRemaining } from '../artifacts/barber-manager/src/data/plan-usage.ts';
+import {
+  planProfessionalAmountForUse,
+  planProfessionalPoolAmount,
+  planSalonAmountForUse,
+  planSalonShareAmount,
+  planValuePerUse,
+  subscriberServiceUsesRemaining,
+  summarizePlanFinance,
+} from '../artifacts/barber-manager/src/data/plan-usage.ts';
 
 const rateFor = service => ({ 'Prótese Capilar': 0.2, Mentoria: 0.3, Barbearia: 0.4 })[service] ?? 0;
 const appointment = (overrides = {}) => ({
@@ -280,4 +289,66 @@ test('plan cost is divided across every included use and cancelled visits do not
 
   assert.equal(planValuePerUse(plan), 20);
   assert.equal(subscriberServiceUsesRemaining(appointments, subscriber, plan.services[0]), 3);
+});
+
+test('plan split allocates exact cents across all uses without exceeding the professional pool', () => {
+  const plan = {
+    id: 'plan-split',
+    name: 'Plano com rateio configurável',
+    price: 100.01,
+    salonSharePercent: 40,
+    duration: 'Mensal',
+    services: [
+      { serviceId: 'cut', serviceName: 'Corte', usesPerCycle: 3 },
+    ],
+  };
+  const useValues = [1, 2, 3].map(ordinal => planProfessionalAmountForUse(plan, ordinal));
+  const salonUseValues = [1, 2, 3].map(ordinal => planSalonAmountForUse(plan, ordinal));
+
+  assert.equal(planSalonShareAmount(plan), 40);
+  assert.equal(planProfessionalPoolAmount(plan), 60.01);
+  assert.deepEqual(useValues, [20.01, 20, 20]);
+  assert.deepEqual(salonUseValues, [13.34, 13.33, 13.33]);
+  assert.equal(useValues.reduce((sum, value, index) => sum + (value ?? 0) + (salonUseValues[index] ?? 0), 0), 100.01);
+  assert.equal(Math.round(useValues.reduce((sum, value) => sum + (value ?? 0), 0) * 100) / 100, 60.01);
+  assert.equal(manualCommissionAllocationMatchesTarget(20.01, [
+    { professionalId: 'one', amount: 12 },
+    { professionalId: 'two', amount: 8.01 },
+  ]), true);
+  assert.equal(manualCommissionAllocationMatchesTarget(20.01, [
+    { professionalId: 'one', amount: 12 },
+    { professionalId: 'two', amount: 8 },
+  ]), false);
+});
+
+test('plan finance summary separates known split, legacy receipts, and commissions earned on uses', () => {
+  const summary = summarizePlanFinance(
+    [
+      { id: 'paid-configured', amount: 100.01, status: 'pago', salonSharePercentSnapshot: 40 },
+      { id: 'paid-legacy', amount: 50, status: 'pago' },
+    ],
+    [
+      {
+        ...appointment({ planSubscriberId: 'subscriber', planUsageValue: 20.01, serviceCommissionRateSnapshot: 1 }),
+        attendanceRecordedAt: '2026-11-03T12:00:00.000Z',
+        status: 'completed',
+      },
+      {
+        ...appointment({ planSubscriberId: 'subscriber', professionalCommissions: [
+          { professionalId: 'one', amount: 12 },
+          { professionalId: 'two', amount: 8.01 },
+        ] }),
+        attendanceRecordedAt: '2026-11-03T12:00:00.000Z',
+        status: 'completed',
+      },
+    ],
+  );
+
+  assert.deepEqual(summary, {
+    receiptTotal: 150.01,
+    salonShareTotal: 40,
+    professionalPoolTotal: 60.01,
+    receiptsWithoutSplit: 50,
+    commissionsRecognizedOnUses: 40.02,
+  });
 });
