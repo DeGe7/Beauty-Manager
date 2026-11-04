@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useStore, ServiceItem, RoleItem, PayMethod, PAY_LABELS } from '@/data/store';
 import { Settings, Building, Users, Shield, Link as LinkIcon, Plus, Trash2, Upload, Image as ImageIcon, LockKeyhole, Copy, UserPlus, History, ArrowDown, ArrowUp } from 'lucide-react';
@@ -350,8 +351,10 @@ export default function Configuracoes() {
           <Settings className="w-6 h-6" />
         </div>
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Configurações</h2>
-          <p className="text-sm text-muted-foreground mt-1">Gerencie os dados base da sua barbearia</p>
+          <div className="flex items-center gap-1">
+            <h2 className="text-2xl font-bold text-foreground">Configurações</h2>
+            <FeatureInfo label="Configurações">Gerencie os dados do estabelecimento, equipe, serviços, produtos, pagamentos e permissões.</FeatureInfo>
+          </div>
         </div>
         </div>
         <nav className="mt-4 grid grid-cols-2 gap-2 pb-1 sm:mt-5 sm:grid-cols-3 lg:grid-cols-8" aria-label="Seções de configurações">
@@ -454,8 +457,10 @@ export default function Configuracoes() {
                {formData.logo ? <img src={formData.logo} alt="Logo do estabelecimento" className="w-full h-full object-contain" /> : <ImageIcon className="w-8 h-8" />}
              </div>
              <div className="text-center sm:text-left">
-               <label className="text-sm font-semibold text-foreground">Foto do Estabelecimento</label>
-               <p className="text-xs text-muted-foreground mt-1">Essa imagem será usada como identificação da sua barbearia.</p>
+               <div className="flex items-center gap-1">
+                 <label className="text-sm font-semibold text-foreground">Foto do Estabelecimento</label>
+                 <FeatureInfo label="Foto do estabelecimento">A imagem será usada para identificar o estabelecimento no aplicativo.</FeatureInfo>
+               </div>
                <button type="button" onClick={() => logoInputRef.current?.click()} className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-border text-sm font-semibold hover:border-brand-gold hover:text-brand-gold transition-colors">
                  <Upload className="w-4 h-4" /> Escolher foto
                </button>
@@ -512,10 +517,8 @@ export default function Configuracoes() {
         <div className="flex items-center gap-3 border-b border-brand-border/50 pb-4">
           <Users className="w-5 h-5 text-brand-gold" />
           <h3 className="text-lg font-bold text-foreground">Equipe e Comissões Rápida</h3>
+          <FeatureInfo label="Equipe e comissões">Serviços têm divisão de 50% para o profissional e 50% para o salão. Esta seção ajusta as comissões de venda.</FeatureInfo>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Serviços são divididos automaticamente: 50% para o profissional e 50% para o salão. Aqui você ajusta somente as comissões por venda.
-        </p>
         
         <div className="space-y-3">
           {activeProfs.map(p => (
@@ -554,9 +557,11 @@ export default function Configuracoes() {
                       </div>
                     ))}
                   </div>
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Execução de serviço: {Math.round(PROFESSIONAL_SERVICE_COMMISSION_RATE * 100)}% para o profissional / 50% para o salão.
-                  </p>
+                  <div className="mt-3">
+                    <FeatureInfo label="Comissão por serviço">
+                      Execução de serviço: {Math.round(PROFESSIONAL_SERVICE_COMMISSION_RATE * 100)}% para o profissional e 50% para o salão.
+                    </FeatureInfo>
+                  </div>
                 </div>
               )}
             </div>
@@ -568,8 +573,10 @@ export default function Configuracoes() {
       {showSection('servicos') && <div id="servicos" className="scroll-mt-24 bg-brand-surface border border-brand-border rounded-2xl p-6 md:p-8 space-y-5 shadow-sm">
         <div className="flex items-center justify-between gap-3 border-b border-brand-border/50 pb-4">
           <div>
-            <h3 className="text-lg font-bold text-foreground">Catálogo de Serviços</h3>
-            <p className="text-sm text-muted-foreground mt-1">Edite nome, categoria, preço, duração, comissão, ordem e disponibilidade.</p>
+            <div className="flex items-center gap-1">
+              <h3 className="text-lg font-bold text-foreground">Catálogo de Serviços</h3>
+              <FeatureInfo label="Catálogo de serviços">Edite nome, categoria, preço, duração, comissão, ordem e disponibilidade.</FeatureInfo>
+            </div>
           </div>
           <button type="button" onClick={saveServices} disabled={isSavingServices} className="min-h-11 shrink-0 rounded-lg bg-brand-gold px-4 py-2 text-sm font-bold text-brand-bg disabled:cursor-not-allowed disabled:opacity-60">
             {isSavingServices ? 'Salvando...' : 'Salvar catálogo'}
@@ -663,13 +670,16 @@ export default function Configuracoes() {
             </button>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">A comissão usa o percentual configurado no perfil do profissional. Alterações ficam pendentes até “Salvar catálogo”. Serviços vinculados a planos ou atendimentos não podem ser excluídos; desative-os para preservar o histórico.</p>
+        <div className="flex items-center gap-2">
+          <FeatureInfo label="Regras do catálogo">A comissão usa o percentual do perfil do profissional. Alterações ficam pendentes até “Salvar catálogo”. Serviços vinculados a planos ou atendimentos não podem ser excluídos; desative-os para preservar o histórico.</FeatureInfo>
+          <p className="text-xs text-warning">Serviços vinculados não podem ser excluídos; desative para preservar o histórico.</p>
+        </div>
       </div>}
 
       {/* Produtos */}
       {showSection('produtos') && <div id="produtos" className="scroll-mt-24 bg-brand-surface border border-brand-border rounded-2xl p-6 md:p-8 space-y-5 shadow-sm">
         <div className="flex items-center justify-between border-b border-brand-border/50 pb-4">
-          <div><h3 className="text-lg font-bold">Produtos e Categorias</h3><p className="text-sm text-muted-foreground mt-1">Edite preço, custo, estoque mínimo e status sem sair das configurações.</p></div>
+          <div className="flex items-center gap-1"><h3 className="text-lg font-bold">Produtos e Categorias</h3><FeatureInfo label="Produtos e categorias">Edite preço, custo, estoque mínimo e status sem sair das configurações.</FeatureInfo></div>
           <Link href="/produtos" className="text-sm text-brand-gold hover:underline">Abrir estoque</Link>
         </div>
         <div className="space-y-2">
@@ -695,7 +705,7 @@ export default function Configuracoes() {
           <p className="text-xs text-muted-foreground" aria-live="polite">{isSavingRoles ? 'Salvando cargos...' : 'Novos cargos são salvos ao adicionar. Para alterar nomes, status ou permissões, use Salvar.'}</p>
         </fieldset>
         <div className="bg-brand-surface border border-brand-border rounded-2xl p-6 space-y-4">
-          <div><h3 className="text-lg font-bold">Formas de pagamento</h3><p className="text-xs text-muted-foreground">A lista aparece no atendimento e aceita divisão.</p></div>
+          <div className="flex items-center gap-1"><h3 className="text-lg font-bold">Formas de pagamento</h3><FeatureInfo label="Formas de pagamento">A lista aparece no atendimento e aceita divisão entre mais de uma forma de pagamento.</FeatureInfo></div>
           {config.paymentMethods.map(payment => <div key={payment.key} className="flex items-center justify-between bg-brand-bg border border-brand-border rounded px-3 py-2"><span className="text-sm">{payment.label}</span><div className="flex items-center gap-3"><button type="button" onClick={() => updateConfig({ paymentMethods: config.paymentMethods.map(item => item.key === payment.key ? { ...item, isActive: !item.isActive } : item) })} className="text-xs text-brand-gold">{payment.isActive ? 'Desativar' : 'Ativar'}</button><button type="button" onClick={() => removePayment(payment.key, payment.label)} aria-label={`Excluir forma de pagamento ${payment.label}`} title="Excluir forma de pagamento" className="p-1.5 rounded text-destructive hover:bg-destructive/10"><Trash2 className="w-4 h-4" /></button></div></div>)}
           <div className="flex gap-2"><input value={newPayment} onChange={e => setNewPayment(e.target.value)} placeholder="Outra forma" className="min-w-0 flex-1 bg-brand-bg border border-brand-border rounded px-2 py-2 text-sm" /><button type="button" onClick={addPayment} className="px-3 rounded bg-brand-gold text-brand-bg"><Plus className="w-4 h-4" /></button></div>
         </div>
@@ -706,8 +716,8 @@ export default function Configuracoes() {
         <div className="flex items-center gap-3 border-b border-brand-border/50 pb-4">
           <Shield className="w-5 h-5 text-brand-gold" />
           <h3 className="text-lg font-bold text-foreground">Papéis e Acesso</h3>
+          <FeatureInfo label="Papéis e acesso">Marque quais áreas cada cargo pode acessar. Gestor e Proprietário mantêm acesso total.</FeatureInfo>
         </div>
-        <p className="text-sm text-muted-foreground">Marque o que cada cargo pode acessar. O Gestor / Proprietário mantém acesso total para não perder o controle da empresa.</p>
         <div className="space-y-4">
           {roleDrafts.map(role => {
             const isProtectedRole = role.key === 'gestor' || role.key === 'dev-admin';
