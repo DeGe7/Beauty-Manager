@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore, brl, ClientSource } from '@/data/store';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
@@ -73,7 +74,11 @@ export default function Clientes() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name || !form.whatsapp) { toast.error('Nome e WhatsApp são obrigatórios'); return; }
+    if (!form.name.trim()) { toast.error('Informe o nome do cliente'); return; }
+    if (!form.whatsapp.trim() && !form.email.trim()) {
+      toast.error('Informe pelo menos o WhatsApp ou o e-mail para poder falar com o cliente.');
+      return;
+    }
     if (form.source === 'Outro' && !form.sourceOther.trim()) { toast.error('Descreva a origem do cliente'); return; }
     const normalizedPhone = normalizeClientPhone(form.whatsapp);
     const duplicatePhone = normalizedPhone.length > 0 && clients.some(client =>
@@ -138,8 +143,8 @@ export default function Clientes() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">WhatsApp *</label>
-                  <input type="text" required value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">WhatsApp{!form.email.trim() ? ' *' : ''}</label>
+                  <input type="tel" inputMode="tel" autoComplete="tel" required={!form.email.trim()} value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Data Nasc.</label>
@@ -148,8 +153,8 @@ export default function Clientes() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Email</label>
-                  <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">E-mail{!form.whatsapp.trim() ? ' *' : ''}</label>
+                  <input type="email" required={!form.whatsapp.trim()} value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
                 </div>
                   <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Origem</label>
@@ -157,6 +162,9 @@ export default function Clientes() {
                      <option>Indicação</option><option>Instagram</option><option>Google</option><option>Facebook</option><option>Site</option><option>Passou na rua</option><option>Outro</option>
                   </select>
                 </div>
+              </div>
+              <div className="flex justify-end">
+                <FeatureInfo label="Contato para follow-up">Informe WhatsApp ou e-mail para que a equipe possa entrar em contato com o cliente depois.</FeatureInfo>
               </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Interesse do cliente *</label>
