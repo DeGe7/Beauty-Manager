@@ -118,6 +118,16 @@ insert into public.organization_settings (organization_id) values
   ('11111111-1111-1111-1111-111111111111'),
   ('22222222-2222-2222-2222-222222222222');
 
+update public.organization_settings
+   set payload = jsonb_build_object(
+     'roles',
+     jsonb_build_array(jsonb_build_object(
+       'key', 'recepcao',
+       'permissions', '["dashboard","agenda","controle","clientes","produtos"]'::jsonb
+     ))
+   )
+ where organization_id = '11111111-1111-1111-1111-111111111111';
+
 insert into storage.objects (id, bucket_id, name) values
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'avatars', '10000000-0000-0000-0000-000000000001/avatar.png'),
   ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'avatars', '10000000-0000-0000-0000-000000000002/avatar.png'),
@@ -367,9 +377,37 @@ select is(
 );
 select is(
   public.has_permission('financeiro') or public.has_permission('profissionais')
-    or public.has_permission('configuracoes'),
+    or public.has_permission('configuracoes') or public.has_permission('comunicacao'),
   false,
-  'reception is denied finance, team, and settings permissions'
+  'reception is denied finance, team, settings, and messaging permissions'
+);
+select is(
+  public.has_permission('planos'),
+  true,
+  'reception always retains plan management when saved permissions are stale'
+);
+select lives_ok(
+  $$insert into public.subscription_plans (id, name, price, organization_id)
+    values ('reception-plan', 'Plano Recepção', 150, '11111111-1111-1111-1111-111111111111')$$,
+  'reception can create a subscription plan'
+);
+select lives_ok(
+  $$update public.subscription_plans set price = 175 where id = 'reception-plan'$$,
+  'reception can edit a subscription plan'
+);
+select lives_ok(
+  $$insert into public.subscribers (id, name, plan_id, professional_id, start_date, next_payment, organization_id)
+    values ('reception-subscriber', 'Assinante Recepção', 'reception-plan', null, '2026-08-01', '2026-09-01', '11111111-1111-1111-1111-111111111111')$$,
+  'reception can add a subscriber without assigning a professional'
+);
+select lives_ok(
+  $$select public.set_subscription_payment_status('reception-subscriber', '2026-09-01', 'pago', '2026-09-01', 175, 'pix', 'Recebido na recepção')$$,
+  'reception can confirm a subscription payment'
+);
+select is(
+  (select next_payment from public.subscribers where id = 'reception-subscriber'),
+  '2026-10-01',
+  'confirmed payment advances the subscriber due date'
 );
 select is((select count(*) from public.professionals), 6::bigint, 'reception can read company professionals');
 select is((select count(*) from public.clients where id = 'client-a-reception'), 1::bigint, 'reception can read clients');
