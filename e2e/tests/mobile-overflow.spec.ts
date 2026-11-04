@@ -329,11 +329,12 @@ test.describe('textos e ações nos cartões de celular', () => {
       const planDialog = page.getByRole('dialog');
       await expectDialogStateWithinViewport(page, planDialog, `${width}px /planos com formulário aberto`);
       const planName = uniqueName(`Plano com nome longo ${longWord}`);
-      const serviceDescription = `Descrição do serviço ${longWord} com informações que devem continuar legíveis`;
       const planInputs = planDialog.locator('input');
       await planInputs.nth(0).fill(planName);
       await planInputs.nth(1).fill('99');
-      await planInputs.nth(2).fill(serviceDescription);
+      await planDialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+      await planDialog.getByTestId('plan-service-uses-0').fill('1');
+      await planDialog.getByTestId('plan-salon-share-percent').fill('50');
       const createPlan = waitForMutation(page, 'subscription_plans', 'POST');
       await planDialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
       await createPlan;
