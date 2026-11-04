@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useStore, brl, SubscriptionPaymentStatus, SubscriptionPlan, Subscriber, PayMethod, PAY_LABELS } from '@/data/store';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger, AlertDialogFooter, AlertDialogDescription } from '@/components/ui/alert-dialog';
@@ -7,7 +8,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { CalendarClock, Check, Clock3, CreditCard, Edit2, History, MessageSquare, Plus, Receipt, RefreshCw, Trash2, Users } from 'lucide-react';
 import { addSubscriptionCycle, differenceInCalendarDays, formatDateKey, parseDateKey } from '@/data/date';
 import { useAuth } from '@/auth/auth';
-import { planServiceBenefits, planServiceLabel, subscriberServiceUsesRemaining } from '@/data/plan-usage';
+import {
+  planProfessionalAmountForUse,
+  planProfessionalPoolAmount,
+  planSalonShareAmount,
+  planServiceBenefits,
+  planServiceLabel,
+  subscriberServiceUsesRemaining,
+  totalPlanIncludedUses,
+} from '@/data/plan-usage';
 import { normalizeClientPhone } from '@/data/client-phone';
 import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
 
@@ -93,8 +102,18 @@ export default function Planos() {
     name: '',
     price: '',
     duration: 'Mensal' as SubscriptionPlan['duration'],
+    salonSharePercent: '',
     services: [{ serviceId: '', usesPerCycle: '1' }],
   });
+  const planFormUses = planForm.services.reduce((total, service) => {
+    const uses = Number(service.usesPerCycle);
+    return total + (Number.isInteger(uses) && uses > 0 ? uses : 0);
+  }, 0);
+  const planFormPrice = Number(planForm.price);
+  const planFormSalonPercent = Number(planForm.salonSharePercent);
+  const planFormGrossCents = Math.round((planFormPrice + Number.EPSILON) * 100);
+  const planFormSalonCents = Math.round(planFormGrossCents * planFormSalonPercent / 100);
+  const planFormProfessionalCents = planFormGrossCents - planFormSalonCents;
 
   const handlePlanOpen = (plan?: SubscriptionPlan) => {
     if (plan) {
@@ -103,13 +122,20 @@ export default function Planos() {
         name: plan.name,
         price: plan.price.toString(),
         duration: plan.duration,
+        salonSharePercent: plan.salonSharePercent == null ? '' : String(plan.salonSharePercent),
         services: plan.services.length
           ? plan.services.map(service => editorServiceFromPlan(service, config.services))
           : [{ serviceId: '', usesPerCycle: '1' }],
       });
     } else {
       setPlanEditingId(null);
-      setPlanForm({ name: '', price: '', duration: 'Mensal', services: [{ serviceId: '', usesPerCycle: '1' }] });
+      setPlanForm({
+        name: '',
+        price: '',
+        duration: 'Mensal',
+        salonSharePercent: '',
+        services: [{ serviceId: '', usesPerCycle: '1' }],
+      });
     }
     setIsPlanOpen(true);
   };
@@ -124,9 +150,16 @@ export default function Planos() {
         usesPerCycle: Number(service.usesPerCycle),
       };
     });
+    const salonSharePercent = Number(planForm.salonSharePercent);
     if (
       !planForm.name
       || !planForm.price
+      || !Number.isFinite(planFormPrice)
+      || planFormPrice < 0
+      || !planForm.salonSharePercent.trim()
+      || !Number.isFinite(salonSharePercent)
+      || salonSharePercent < 0
+      || salonSharePercent > 100
       || validServices.length === 0
       || validServices.some(service => !service.serviceId || !service.serviceName || !Number.isInteger(service.usesPerCycle) || service.usesPerCycle < 1)
     ) {
@@ -138,8 +171,18 @@ export default function Planos() {
       return;
     }
     const saved = planEditingId
-      ? await updatePlan(planEditingId, { ...planForm, price: Number(planForm.price), services: validServices })
-      : await addPlan({ ...planForm, price: Number(planForm.price), services: validServices });
+      ? await updatePlan(planEditingId, {
+          ...planForm,
+          price: planFormPrice,
+          salonSharePercent: Math.round(salonSharePercent * 100) / 100,
+          services: validServices,
+        })
+      : await addPlan({
+          ...planForm,
+          price: planFormPrice,
+          salonSharePercent: Math.round(salonSharePercent * 100) / 100,
+          services: validServices,
+        });
     if (!saved) return;
     toast.success(planEditingId ? 'Plano atualizado' : 'Plano criado');
     setIsPlanOpen(false);
@@ -402,8 +445,10 @@ export default function Planos() {
       <div>
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 md:gap-4 mb-5 md:mb-6">
           <div>
-            <h2 className="min-w-0 text-xl sm:text-2xl font-bold tracking-tight text-foreground flex items-center gap-2"><CreditCard className="shrink-0 text-brand-gold" /> Planos Disponíveis</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Crie planos, vincule assinantes e acompanhe usos e pagamentos.</p>
+            <div className="flex items-center gap-1">
+              <h2 className="min-w-0 text-xl sm:text-2xl font-bold tracking-tight text-foreground flex items-center gap-2"><CreditCard className="shrink-0 text-brand-gold" /> Planos Disponíveis</h2>
+              <FeatureInfo label="Planos disponíveis">Crie planos, vincule assinantes e acompanhe usos, renovações e pagamentos.</FeatureInfo>
+            </div>
           </div>
           <Dialog open={isPlanOpen} onOpenChange={setIsPlanOpen}>
             <DialogTrigger asChild><button onClick={() => handlePlanOpen()} className="min-h-11 w-full md:w-auto justify-center bg-brand-surface border border-brand-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-bg transition-colors flex items-center gap-2"><Plus className="w-4 h-4" /> Novo Plano</button></DialogTrigger>
@@ -416,10 +461,18 @@ export default function Planos() {
                   <div><label className="text-xs uppercase text-muted-foreground">Frequência</label><select value={planForm.duration} onChange={e => setPlanForm({ ...planForm, duration: e.target.value as SubscriptionPlan['duration'] })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option>Mensal</option><option>Trimestral</option><option>Semestral</option><option>Anual</option></select></div>
                 </div>
                 <div>
-                  <label className="text-xs uppercase text-muted-foreground block mb-2">Serviços Inclusos</label>
+                  <div className="mb-2 flex items-center gap-1">
+                    <label className="text-xs uppercase text-muted-foreground">Serviços Inclusos</label>
+                    <FeatureInfo label="Serviços inclusos">
+                      {Number(planForm.price) > 0 && planForm.services.every(service => Number(service.usesPerCycle) > 0)
+                        ? `Valor de referência por uso: ${brl(Number(planForm.price) / planForm.services.reduce((total, service) => total + Number(service.usesPerCycle), 0))}. A comissão do profissional será aplicada sobre essa parcela.`
+                        : 'Informe quantos usos de cada serviço fazem parte do ciclo do plano.'}
+                    </FeatureInfo>
+                  </div>
                   {planForm.services.map((service, index) => <div key={index} className="grid min-w-0 grid-cols-[minmax(0,1fr)_6rem_2.75rem] gap-2 mb-2">
                     <select
                       required
+                      data-testid={`plan-service-select-${index}`}
                       value={service.serviceId}
                       onChange={event => {
                         const services = [...planForm.services];
@@ -438,6 +491,7 @@ export default function Planos() {
                       Usos
                       <input
                         type="number"
+                      data-testid={`plan-service-uses-${index}`}
                         min="1"
                         step="1"
                         required
@@ -454,11 +508,39 @@ export default function Planos() {
                     <button type="button" aria-label="Remover serviço" onClick={() => setPlanForm({ ...planForm, services: planForm.services.filter((_, itemIndex) => itemIndex !== index) })} className="mt-4 flex min-h-11 min-w-11 items-center justify-center text-destructive"><Trash2 className="w-4 h-4" /></button>
                   </div>)}
                   <button type="button" onClick={() => setPlanForm({ ...planForm, services: [...planForm.services, { serviceId: '', usesPerCycle: '1' }] })} className="min-h-11 text-xs text-brand-gold font-bold flex items-center gap-1"><Plus className="w-3 h-3" /> Adicionar serviço incluso</button>
-                  <p className="text-xs text-muted-foreground">
-                    {Number(planForm.price) > 0 && planForm.services.every(service => Number(service.usesPerCycle) > 0)
-                      ? `Valor de referência por uso: ${brl(Number(planForm.price) / planForm.services.reduce((total, service) => total + Number(service.usesPerCycle), 0))}. A comissão do profissional será aplicada sobre essa parcela.`
-                      : 'Informe quantos usos de cada serviço fazem parte do ciclo do plano.'}
-                  </p>
+                </div>
+                <div className="rounded-xl border border-brand-border bg-brand-bg/60 p-3">
+                  <div className="flex items-center gap-1">
+                    <label htmlFor="plan-salon-share-percent" className="text-xs uppercase text-muted-foreground">Parte do salão (%)</label>
+                    <FeatureInfo label="Divisão do valor do plano">O percentual restante é reservado aos profissionais e dividido pelos usos incluídos.</FeatureInfo>
+                  </div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      id="plan-salon-share-percent"
+                      data-testid="plan-salon-share-percent"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.01"
+                      required
+                      value={planForm.salonSharePercent}
+                      onChange={event => setPlanForm({ ...planForm, salonSharePercent: event.target.value })}
+                      className="min-h-11 w-full bg-brand-surface border border-brand-border rounded px-3 py-2 outline-none"
+                    />
+                    <span className="text-sm text-muted-foreground">%</span>
+                  </div>
+                  {planForm.salonSharePercent.trim()
+                    && Number.isFinite(planFormSalonPercent)
+                    && planFormSalonPercent >= 0
+                    && planFormSalonPercent <= 100
+                    && planFormPrice >= 0
+                    && planFormUses > 0 && (
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+                      <p>Salão: <strong>{brl(planFormSalonCents / 100)}</strong></p>
+                      <p>Profissionais: <strong>{brl(planFormProfessionalCents / 100)}</strong></p>
+                      <p>Referência por uso: <strong>{brl(planFormProfessionalCents / 100 / planFormUses)}</strong></p>
+                    </div>
+                  )}
                 </div>
                 <button type="submit" className="min-h-11 w-full bg-brand-gold text-brand-bg font-bold py-2 rounded-lg">Salvar Plano</button>
               </form>
@@ -478,6 +560,25 @@ export default function Planos() {
               <div className="absolute top-3 right-3 flex gap-1 opacity-100 md:top-4 md:right-4 md:opacity-0 md:group-hover:opacity-100 transition-opacity"><button aria-label={`Editar plano ${plan.name}`} onClick={() => handlePlanOpen(plan)} className="flex min-h-11 min-w-11 items-center justify-center bg-brand-surface border border-brand-border rounded text-muted-foreground hover:text-foreground"><Edit2 className="w-4 h-4" /></button><button aria-label={`Excluir plano ${plan.name}`} onClick={() => handlePlanDelete(plan.id)} className="flex min-h-11 min-w-11 items-center justify-center bg-brand-surface border border-brand-border rounded text-destructive hover:bg-destructive/10"><Trash2 className="w-4 h-4" /></button></div>
               <h4 data-testid={`mobile-plan-name-${plan.id}`} className="min-w-0 break-words [overflow-wrap:anywhere] pr-24 font-bold text-lg">{plan.name}</h4><p className="text-brand-gold font-bold text-2xl mt-1 break-words">{brl(plan.price)}<span className="text-sm text-muted-foreground font-normal"> / {plan.duration.toLowerCase()}</span></p>
               <div className="mt-4 flex-1"><ul className="space-y-2 text-sm text-muted-foreground">{plan.services.map((service, index) => <li key={index} className="flex min-w-0 items-start gap-2"><Check className="w-4 h-4 text-brand-gold shrink-0 mt-0.5" /><span data-testid={`mobile-plan-service-${plan.id}-${index}`} className="min-w-0 break-words [overflow-wrap:anywhere]">{planServiceLabel(service)}</span></li>)}</ul></div>
+              <div className="mt-4 rounded-lg border border-brand-border bg-brand-surface p-3 text-xs">
+                {plan.salonSharePercent == null ? (
+                  <>
+                    <p className="font-semibold text-warning">Rateio novo não configurado</p>
+                    <FeatureInfo label="Rateio do plano">Este plano mantém a regra de comissão atual até configurar a parte do salão.</FeatureInfo>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold text-foreground">
+                      Salão {plan.salonSharePercent}% · Profissionais {100 - plan.salonSharePercent}%
+                    </p>
+                    <div className="mt-1">
+                      <FeatureInfo label={`Rateio de ${plan.name}`}>
+                        {totalPlanIncludedUses(plan)} usos · {brl(planProfessionalPoolAmount(plan) ?? 0)} reservados aos profissionais · primeiro uso: {brl(planProfessionalAmountForUse(plan, 1) ?? 0)} · parte do salão no valor atual: {brl(planSalonShareAmount(plan) ?? 0)}.
+                      </FeatureInfo>
+                    </div>
+                  </>
+                )}
+              </div>
               <div className="mt-5 pt-4 border-t border-brand-border flex justify-between items-center text-sm"><span className="text-muted-foreground">Assinantes:</span><span className="font-bold">{subscribers.filter(subscriber => subscriber.planId === plan.id).length}</span></div>
             </div>)}
           </div>}
@@ -486,8 +587,10 @@ export default function Planos() {
       <section className="pt-8 border-t border-brand-border">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
           <div>
-            <h2 className="text-2xl font-bold text-foreground flex items-center gap-2"><CalendarClock className="text-brand-gold" /> Avisos de vencimento</h2>
-          <p className="text-sm text-muted-foreground mt-1">Acompanhe mensalidades atrasadas e os próximos vencimentos.</p>
+            <div className="flex items-center gap-1">
+              <h2 className="text-2xl font-bold text-foreground flex items-center gap-2"><CalendarClock className="text-brand-gold" /> Avisos de vencimento</h2>
+              <FeatureInfo label="Avisos de vencimento">Consulte mensalidades atrasadas e próximos vencimentos no período selecionado.</FeatureInfo>
+            </div>
           </div>
           <div className="flex min-w-0 flex-col sm:flex-row items-stretch sm:items-center gap-3 text-sm text-muted-foreground">
             <label className="flex items-center gap-2">
@@ -531,14 +634,14 @@ export default function Planos() {
 
       <div className="pt-8 border-t border-brand-border">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-          <div><h2 className="text-2xl font-bold text-foreground flex items-center gap-2"><Users className="text-brand-gold" /> Assinantes</h2><p className="text-sm text-muted-foreground mt-1">Controle recebimentos diretamente no estabelecimento, sem cobrança online.</p></div>
+          <div className="flex items-center gap-1"><h2 className="text-2xl font-bold text-foreground flex items-center gap-2"><Users className="text-brand-gold" /> Assinantes</h2><FeatureInfo label="Assinantes">Controle os ciclos e confirme mensalidades presencialmente. Não há cobrança online.</FeatureInfo></div>
           <Dialog open={isSubOpen} onOpenChange={setIsSubOpen}>
             <DialogTrigger asChild><button onClick={() => handleSubOpen()} className="min-h-11 w-full md:w-auto justify-center bg-brand-gold text-brand-bg px-4 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2"><Plus className="w-4 h-4" /> Adicionar Assinante</button></DialogTrigger>
             <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[90dvh] overflow-y-auto bg-brand-surface border-brand-border text-foreground sm:max-w-lg">
               <DialogHeader><DialogTitle>{subEditingId ? 'Editar Assinante' : 'Novo Assinante'}</DialogTitle></DialogHeader>
               <form onSubmit={handleSubSubmit} className="space-y-4 pt-4 [&_input]:min-h-11 [&_select]:min-h-11">
                  <div>
-                   <p id="subscriber-client-search-label" className="text-xs uppercase text-muted-foreground">Buscar cliente cadastrado</p>
+                   <div className="flex items-center gap-1"><p id="subscriber-client-search-label" className="text-xs uppercase text-muted-foreground">Buscar cliente cadastrado</p><FeatureInfo label="Vincular assinante">Pesquise pelo nome ou telefone para reutilizar um cliente existente. Se não encontrar, o cadastro do cliente será criado junto com a assinatura.</FeatureInfo></div>
                    {selectedSubClient ? (
                      <div className="mt-1 flex items-center justify-between gap-3 rounded-lg border border-brand-gold/50 bg-brand-bg px-4 py-2">
                        <div className="min-w-0">
@@ -638,13 +741,9 @@ export default function Planos() {
                    </p>
                  ) : selectedSubClient ? (
                    <p role="status" className="text-xs text-muted-foreground">O assinante será vinculado a este cadastro de cliente.</p>
-                 ) : (
-                   <p className="text-xs text-muted-foreground">Se o cliente ainda não estiver cadastrado, ele será incluído em Clientes ao salvar.</p>
-                 )}
+                 ) : null}
                  <div><label className="text-xs uppercase text-muted-foreground">Plano *</label><select required value={subForm.planId} onChange={e => { const planId = e.target.value; setSubForm({ ...subForm, planId, nextPayment: calculatedNextPayment(planId, subForm.startDate) }); }} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option value="">Selecione...</option>{plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label className="text-xs uppercase text-muted-foreground">Início</label><input type="date" required value={subForm.startDate} onChange={e => setSubForm({ ...subForm, startDate: e.target.value, nextPayment: calculatedNextPayment(subForm.planId, e.target.value) })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div><div><label className="text-xs uppercase text-muted-foreground">Próximo vencimento</label><div className="min-h-11 w-full bg-brand-bg/60 border border-brand-border rounded px-3 py-3 mt-1 text-sm text-muted-foreground">{subForm.nextPayment ? displayDate(subForm.nextPayment) : 'Selecione o plano'}</div></div></div>
-                <p className="text-xs text-muted-foreground flex gap-2 items-start"><CalendarClock className="w-4 h-4 text-brand-gold shrink-0" /> O vencimento é calculado automaticamente conforme o ciclo do plano. O recebimento é confirmado na tela de controle presencial.</p>
-                 <p className="text-xs text-muted-foreground">Renovar usos não altera o vencimento; trocar o assinante para outro plano reinicia as cotas do novo plano.</p>
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label className="text-xs uppercase text-muted-foreground">Início</label><input type="date" required value={subForm.startDate} onChange={e => setSubForm({ ...subForm, startDate: e.target.value, nextPayment: calculatedNextPayment(subForm.planId, e.target.value) })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div><div><div className="flex items-center gap-1"><label className="text-xs uppercase text-muted-foreground">Próximo vencimento</label><FeatureInfo label="Ciclo e usos do plano">O vencimento é calculado pelo ciclo do plano. Confirme o recebimento no Controle Diário. Renovar usos não altera o vencimento; trocar o assinante para outro plano reinicia as cotas.</FeatureInfo></div><div className="min-h-11 w-full bg-brand-bg/60 border border-brand-border rounded px-3 py-3 mt-1 text-sm text-muted-foreground">{subForm.nextPayment ? displayDate(subForm.nextPayment) : 'Selecione o plano'}</div></div></div>
                  <button type="submit" disabled={isSubSaving} className="min-h-11 w-full bg-brand-gold text-brand-bg font-bold py-2 rounded-lg disabled:cursor-not-allowed disabled:opacity-60">{isSubSaving ? 'Salvando...' : 'Salvar Assinante'}</button>
               </form>
             </DialogContent>
@@ -680,7 +779,7 @@ export default function Planos() {
       </div>
 
       <section className="pt-8 border-t border-brand-border">
-        <div className="flex items-center gap-2 mb-4"><History className="text-brand-gold" /><div><h2 className="text-2xl font-bold">Histórico presencial</h2><p className="text-sm text-muted-foreground">Confirmações, pendências e vencimentos registrados por ciclo.</p></div></div>
+        <div className="mb-4 flex items-center gap-2"><History className="text-brand-gold" /><h2 className="text-2xl font-bold">Histórico presencial</h2><FeatureInfo label="Histórico presencial">Consulte confirmações, pendências e vencimentos registrados em cada ciclo.</FeatureInfo></div>
         <div className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-3 sm:p-6">
           {history.length === 0 ? <p className="text-center py-8 text-muted-foreground">Nenhuma mensalidade registrada ainda.</p> : <div className="space-y-3">{history.slice(0, 20).map(payment => {
             const subscriber = subscribers.find(item => item.id === payment.subscriberId);
@@ -691,8 +790,13 @@ export default function Planos() {
 
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
         <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[90dvh] overflow-y-auto bg-brand-surface border-brand-border text-foreground sm:max-w-lg">
-          <DialogHeader><DialogTitle>Controle de mensalidade presencial</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">Atualize o ciclo de <strong className="text-foreground">{paymentSubscriber?.name}</strong>. Nenhuma cobrança online será criada.</p>
+          <DialogHeader>
+            <div className="flex items-center gap-1">
+              <DialogTitle>Controle de mensalidade presencial</DialogTitle>
+              <FeatureInfo label="Atualizar ciclo">A alteração é feita manualmente e não cria uma cobrança online.</FeatureInfo>
+            </div>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">Assinante: <strong className="text-foreground">{paymentSubscriber?.name}</strong></p>
           <form onSubmit={handlePaymentSubmit} className="space-y-4 pt-2 [&_input]:min-h-11 [&_select]:min-h-11">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label className="text-xs uppercase text-muted-foreground">Status *</label><select value={paymentForm.status} onChange={e => setPaymentForm({ ...paymentForm, status: e.target.value as SubscriptionPaymentStatus })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option value="pago">Paga</option><option value="pendente">Pendente</option><option value="vencido">Vencida</option></select></div><div><label className="text-xs uppercase text-muted-foreground">Vencimento</label><input type="date" required value={paymentForm.dueDate} onChange={e => setPaymentForm({ ...paymentForm, dueDate: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div></div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label className="text-xs uppercase text-muted-foreground">Valor (R$)</label><input type="number" min="0" step="0.01" required value={paymentForm.amount} onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none" /></div>{paymentForm.status === 'pago' && <div><label className="text-xs uppercase text-muted-foreground">Recebido em *</label><input type="date" required value={paymentForm.paidAt} onChange={e => setPaymentForm({ ...paymentForm, paidAt: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div>}</div>
