@@ -65,7 +65,7 @@ export function getPermissionsForRole(role: Role | null, permissions?: string[])
   if (role === 'recepcao') {
     return [...new Set(rolePermissions.filter(permission =>
       !['financeiro', 'profissionais', 'configuracoes', 'comunicacao'].includes(permission),
-    ))];
+    ).concat('planos'))];
   }
   if (role !== 'vendedor') return [...new Set(rolePermissions)];
   return [...new Set([...rolePermissions.filter(permission => permission !== 'vendas'), 'controle'])];
