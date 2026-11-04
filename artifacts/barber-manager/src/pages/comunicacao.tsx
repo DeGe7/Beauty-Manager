@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore, Client } from '@/data/store';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { api, CommunicationChannel, CommunicationSend } from '@/data/api';
 import { useAuth } from '@/auth/auth';
 import { toast } from 'sonner';
@@ -231,8 +232,10 @@ export default function Comunicacao() {
       <div className="flex items-start gap-3 border-b border-brand-border pb-4 sm:gap-4 sm:pb-6">
         <div className="hidden sm:block p-3 rounded-xl bg-brand-surface border border-brand-border text-brand-gold"><MessageSquare className="w-6 h-6" /></div>
         <div>
-          <h2 className="text-2xl font-bold">Disparos de Mensagens</h2>
-          <p className="text-sm text-muted-foreground mt-1">Prepare campanhas segmentadas e encaminhe cada mensagem pelo canal escolhido.</p>
+          <div className="flex items-center gap-1">
+            <h2 className="text-2xl font-bold">Disparos de Mensagens</h2>
+            <FeatureInfo label="Disparos de mensagens">Prepare campanhas por público e encaminhe mensagens pelo WhatsApp ou e-mail.</FeatureInfo>
+          </div>
         </div>
       </div>
 
@@ -241,14 +244,18 @@ export default function Comunicacao() {
           const Icon = item.icon;
           const selected = item.id === activeCampaign;
           return (
-            <button key={item.id} type="button" onClick={() => setActiveCampaign(item.id)} className={`text-left p-4 rounded-xl border transition-colors ${selected ? 'border-brand-gold bg-brand-gold/10' : 'border-brand-border bg-brand-surface hover:border-brand-gold/50'}`}>
-              <div className="flex items-start justify-between gap-3">
-                <Icon className={`w-5 h-5 ${selected ? 'text-brand-gold' : 'text-muted-foreground'}`} />
-                <span className={`text-2xl font-bold ${selected ? 'text-brand-gold' : 'text-foreground'}`}>{audiences[item.id].length}</span>
+            <div key={item.id} className={`rounded-xl border p-4 transition-colors ${selected ? 'border-brand-gold bg-brand-gold/10' : 'border-brand-border bg-brand-surface hover:border-brand-gold/50'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <button type="button" onClick={() => setActiveCampaign(item.id)} aria-pressed={selected} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                  <Icon className={`h-5 w-5 shrink-0 ${selected ? 'text-brand-gold' : 'text-muted-foreground'}`} />
+                  <p className={`truncate font-bold ${selected ? 'text-brand-gold' : 'text-foreground'}`}>{item.label}</p>
+                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <span className={`text-2xl font-bold ${selected ? 'text-brand-gold' : 'text-foreground'}`}>{audiences[item.id].length}</span>
+                  <FeatureInfo label={item.label}>{item.description}</FeatureInfo>
+                </div>
               </div>
-              <p className="font-bold mt-3">{item.label}</p>
-              <p className="text-xs text-muted-foreground mt-1">{item.description}</p>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -257,8 +264,10 @@ export default function Comunicacao() {
         <section className="bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-lg font-bold">Mensagem da campanha</h3>
-              <p className="text-xs text-muted-foreground mt-1">Use {'{nome}'} e {'{empresa}'} para personalizar.</p>
+              <div className="flex items-center gap-1">
+                <h3 className="text-lg font-bold">Mensagem da campanha</h3>
+                <FeatureInfo label="Personalizar mensagem">Use {'{nome}'} e {'{empresa}'} para inserir automaticamente o nome do contato e o nome do estabelecimento.</FeatureInfo>
+              </div>
             </div>
             <Megaphone className="w-5 h-5 text-brand-gold" />
           </div>
@@ -286,7 +295,9 @@ export default function Comunicacao() {
               <Copy className="w-4 h-4" /> Copiar lote para o n8n
             </button>
           </div>
-          <p className="text-xs text-muted-foreground">O Beauty Manager abre o WhatsApp ou o aplicativo de e-mail com a mensagem preenchida. Confirme o envio no canal aberto; o início e eventuais bloqueios ficam registrados.</p>
+          <div className="flex justify-end">
+            <FeatureInfo label="Envio da campanha">O Beauty Manager abre o WhatsApp ou o aplicativo de e-mail com a mensagem preenchida. Confirme o envio no canal aberto; o início e eventuais bloqueios ficam registrados.</FeatureInfo>
+          </div>
         </section>
 
         <section className="bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 space-y-4">
@@ -329,8 +340,10 @@ export default function Comunicacao() {
       <section className="bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between gap-3 border-b border-brand-border/50 pb-4">
           <div>
-            <h3 className="text-lg font-bold">Histórico de envios</h3>
-            <p className="text-xs text-muted-foreground mt-1">Registra quando o canal foi aberto e quando o navegador bloqueou a tentativa.</p>
+              <div className="flex items-center gap-1">
+                <h3 className="text-lg font-bold">Histórico de envios</h3>
+                <FeatureInfo label="Histórico de envios">Registra quando o canal foi aberto e quando o navegador bloqueou a tentativa.</FeatureInfo>
+              </div>
           </div>
           <Mail className="w-5 h-5 text-brand-gold" />
         </div>
