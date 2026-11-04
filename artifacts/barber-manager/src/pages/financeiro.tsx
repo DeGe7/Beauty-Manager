@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore, brl, ExpenseCategory, EXPENSE_CATEGORIES, PAY_LABELS, PayMethod, ProfessionalCommissions } from '@/data/store';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import {
@@ -143,7 +144,7 @@ export default function Financeiro() {
   const { profile, viewAsProfile } = useAuth();
   const activeProfile = viewAsProfile ?? profile;
   const {
-    expenses, incomes, appointments, professionals, products, prothesisSales, mentoriaSessions,
+    expenses, incomes, appointments, professionals, products, productSales, prothesisSales, mentoriaSessions,
     plans, subscribers, subscriptionPayments, config, addExpense, updateExpense, removeExpense,
     addIncome, updateIncome, removeIncome, financeHistory, refreshFinanceHistory, cashClosings,
     addCashClosing, removeCashClosing, updateConfig, isLoading,
@@ -152,9 +153,11 @@ export default function Financeiro() {
     ...appointments.map(item => ({ id: `appointment:${item.id}` })),
     ...prothesisSales.map(item => ({ id: `prosthesis:${item.id}` })),
     ...mentoriaSessions.map(item => ({ id: `mentoring:${item.id}` })),
+    ...productSales.map(item => ({ id: `product-sale:${item.id}` })),
+    ...productSales.filter(item => item.reversalDate).map(item => ({ id: `product-reversal:${item.id}` })),
     ...incomes.map(item => ({ id: `income:${item.id}` })),
     ...expenses.map(item => ({ id: `expense:${item.id}` })),
-  ], [appointments, prothesisSales, mentoriaSessions, incomes, expenses]);
+  ], [appointments, productSales, prothesisSales, mentoriaSessions, incomes, expenses]);
   const recentlyAddedFinanceIds = useRecentlyAddedIds(financeAnimationItems, isLoading);
   const isManager = activeProfile?.role === 'gestor' || activeProfile?.role === 'dev-admin';
 
@@ -269,6 +272,8 @@ export default function Financeiro() {
 
   const mExpenses = expenses.filter(e => periodMatch(e.date));
   const mIncomes = incomes.filter(i => periodMatch(i.date));
+  const mProductSales = productSales.filter(sale => periodMatch(sale.date));
+  const mProductReversals = productSales.filter(sale => Boolean(sale.reversalDate && periodMatch(sale.reversalDate)));
   const mAppts = appointments.filter(a => periodMatch(a.date) && (a.status === 'confirmed' || a.status === 'completed'));
   const mProthesis = prothesisSales.filter(p => periodMatch(p.date));
   const mMentoria = mentoriaSessions.filter(m => periodMatch(m.date) && m.status === 'completed');
@@ -280,8 +285,10 @@ export default function Financeiro() {
   const prothesisRevenue = mProthesis.reduce((s, p) => s + (p.installmentsPaid / p.installments) * p.value, 0);
   const mentoriaRevenue = mMentoria.reduce((s, m) => s + m.value, 0);
   const manualRevenue = mIncomes.reduce((s, i) => s + i.amount, 0);
+  const productSalesRevenue = mProductSales.reduce((sum, sale) => sum + sale.total, 0)
+    - mProductReversals.reduce((sum, sale) => sum + sale.total, 0);
   const planRevenue = mPlanPayments.reduce((sum, payment) => sum + payment.amount, 0);
-  const totalIn = apptRevenue + prothesisRevenue + mentoriaRevenue + manualRevenue + planRevenue;
+  const totalIn = apptRevenue + prothesisRevenue + mentoriaRevenue + manualRevenue + productSalesRevenue + planRevenue;
   const totalOut = mExpenses.reduce((s, e) => s + e.amount, 0);
   const result = totalIn - totalOut;
 
@@ -310,6 +317,12 @@ export default function Financeiro() {
       paymentTotals[sale.payMethod1] += paidAmount;
     }
   });
+  mProductSales.forEach(sale => {
+    paymentTotals[sale.paymentMethod] += sale.total;
+  });
+  mProductReversals.forEach(sale => {
+    paymentTotals[sale.paymentMethod] -= sale.total;
+  });
   mPlanPayments.forEach(payment => {
     if (payment.paymentMethod && payment.paymentMethod in paymentTotals) {
       paymentTotals[payment.paymentMethod] += payment.amount;
@@ -328,9 +341,14 @@ export default function Financeiro() {
     proth: prothesisSales.filter(p => dateMatch(p.date)).reduce((s, p) => s + (p.installmentsPaid / p.installments) * p.value, 0),
     ment: mentoriaSessions.filter(m => dateMatch(m.date) && m.status === 'completed').reduce((s, m) => s + m.value, 0),
     manual: incomes.filter(i => dateMatch(i.date)).reduce((s, i) => s + i.amount, 0),
+    products: productSales.reduce((sum, sale) => {
+      const saleAmount = dateMatch(sale.date) ? sale.total : 0;
+      const reversalAmount = sale.reversalDate && dateMatch(sale.reversalDate) ? sale.total : 0;
+      return sum + saleAmount - reversalAmount;
+    }, 0),
     plans: paidSubscriptionReceipts.filter(payment => dateMatch(payment.receiptDate)).reduce((s, payment) => s + payment.amount, 0),
   });
-  const sumRev = (r: ReturnType<typeof periodRevenue>) => r.appt + r.proth + r.ment + r.manual + r.plans;
+  const sumRev = (r: ReturnType<typeof periodRevenue>) => r.appt + r.proth + r.ment + r.manual + r.products + r.plans;
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const dailyData = Array.from({length: daysInMonth}, (_, i) => {
@@ -400,6 +418,20 @@ export default function Financeiro() {
       }
     });
   });
+  mProductSales.forEach(sale => {
+    sale.items.forEach(item => {
+      if (!prodDataObj[item.productId]) prodDataObj[item.productId] = { qty: 0, rev: 0 };
+      prodDataObj[item.productId].qty += item.quantity;
+      prodDataObj[item.productId].rev += item.total;
+    });
+  });
+  mProductReversals.forEach(sale => {
+    sale.items.forEach(item => {
+      if (!prodDataObj[item.productId]) prodDataObj[item.productId] = { qty: 0, rev: 0 };
+      prodDataObj[item.productId].qty -= item.quantity;
+      prodDataObj[item.productId].rev -= item.total;
+    });
+  });
   const prodDataList = Object.entries(prodDataObj).map(([id, d]) => ({ name: products.find(p=>p.id===id)?.name||'?', ...d })).sort((a,b) => b.rev - a.rev);
 
   const weekDataObj = { 'Dom':0, 'Seg':0, 'Ter':0, 'Qua':0, 'Qui':0, 'Sex':0, 'Sáb':0 };
@@ -412,6 +444,8 @@ export default function Financeiro() {
   mProthesis.forEach(p => addToWeek(p.date, (p.installmentsPaid / p.installments) * p.value));
   mMentoria.forEach(m => addToWeek(m.date, m.value));
   mIncomes.forEach(i => addToWeek(i.date, i.amount));
+  mProductSales.forEach(sale => addToWeek(sale.date, sale.total));
+  mProductReversals.forEach(sale => addToWeek(sale.reversalDate!, -sale.total));
   mPlanPayments.forEach(payment => addToWeek(payment.receiptDate, payment.amount));
   const weekData = weekDays.map(d => ({ name: d, val: weekDataObj[d as keyof typeof weekDataObj] }));
 
@@ -422,6 +456,8 @@ export default function Financeiro() {
     const monthProth = prothesisSales.filter(p => p.date.startsWith(prefix));
     const monthMent = mentoriaSessions.filter(ms => ms.date.startsWith(prefix) && ms.status === 'completed');
     const monthManual = incomes.filter(inc => inc.date.startsWith(prefix));
+    const monthProductSales = productSales.filter(sale => sale.date.startsWith(prefix));
+    const monthProductReversals = productSales.filter(sale => sale.reversalDate?.startsWith(prefix));
     const monthPlans = paidSubscriptionReceipts.filter(payment => payment.receiptDate.startsWith(prefix));
     return {
       name: m,
@@ -429,6 +465,8 @@ export default function Financeiro() {
           monthProth.reduce((s, p) => s + (p.installmentsPaid / p.installments) * p.value, 0) +
           monthMent.reduce((s, ms) => s + ms.value, 0) +
           monthManual.reduce((s, inc) => s + inc.amount, 0) +
+          monthProductSales.reduce((sum, sale) => sum + sale.total, 0) -
+          monthProductReversals.reduce((sum, sale) => sum + sale.total, 0) +
           monthPlans.reduce((s, payment) => s + payment.amount, 0),
       out: expenses.filter(e => e.date.startsWith(prefix)).reduce((s, e) => s + e.amount, 0)
     };
@@ -510,7 +548,9 @@ export default function Financeiro() {
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-2xl font-bold text-foreground">Financeiro</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Visão individual dos seus ganhos.</p>
+            <div className="mt-1 flex items-center gap-1">
+              <FeatureInfo label="Financeiro individual">Esta visão mostra somente os ganhos atribuídos ao seu perfil.</FeatureInfo>
+            </div>
           </div>
           <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto">
             <select
@@ -762,8 +802,10 @@ export default function Financeiro() {
               <div className="bg-brand-surface border border-brand-border rounded-2xl p-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-5">
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">Entradas e saídas por forma de pagamento</h3>
-                    <p className="text-xs text-muted-foreground mt-1">Movimentações financeiras no período selecionado</p>
+                    <div className="flex items-center gap-1">
+                      <h3 className="text-lg font-bold text-foreground">Entradas e saídas por forma de pagamento</h3>
+                      <FeatureInfo label="Entradas e saídas">Consulte os valores recebidos e pagos em cada forma de pagamento no período selecionado.</FeatureInfo>
+                    </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -793,10 +835,10 @@ export default function Financeiro() {
               <section data-testid="finance-plan-receipts" className="bg-brand-surface border border-brand-border rounded-2xl p-6">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">Mensalidades recebidas</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Apenas pagamentos confirmados, pela data em que foram recebidos. Não lance novamente como receita manual.
-                    </p>
+                    <div className="flex items-center gap-1">
+                      <h3 className="text-lg font-bold text-foreground">Mensalidades recebidas</h3>
+                      <FeatureInfo label="Mensalidades recebidas">Exibe pagamentos confirmados pela data em que foram recebidos. Não registre o mesmo valor novamente como receita manual.</FeatureInfo>
+                    </div>
                   </div>
                   <strong className="text-lg text-success">{brl(planRevenue)}</strong>
                 </div>
@@ -868,9 +910,7 @@ export default function Financeiro() {
                              <DialogHeader>
                                <DialogTitle>Histórico de alterações financeiras</DialogTitle>
                              </DialogHeader>
-                             <p className="text-sm text-muted-foreground">
-                               Consulta somente leitura das alterações feitas em receitas e despesas manuais.
-                             </p>
+                              <FeatureInfo label="Histórico financeiro">Consulta somente leitura das alterações feitas em receitas e despesas manuais.</FeatureInfo>
                              <div className="space-y-3">
                                {financeHistory.length === 0 ? (
                                  <p className="text-sm text-muted-foreground text-center py-8">Nenhuma alteração registrada.</p>
@@ -972,12 +1012,34 @@ export default function Financeiro() {
                         }),
                         ...mProthesis.map(p => ({ id: p.id, animationId: `prosthesis:${p.id}`, date: p.date, label: 'Prótese', description: `${p.client} (${p.installmentsPaid}/${p.installments} parcelas)`, amount: (p.installmentsPaid / p.installments) * p.value, sign: '+' as const, canDelete: false })),
                         ...mMentoria.map(m => ({ id: m.id, animationId: `mentoring:${m.id}`, date: m.date, label: 'Mentoria', description: m.client, amount: m.value, sign: '+' as const, canDelete: false })),
+                        ...mProductSales.map(sale => ({
+                          id: sale.id,
+                          animationId: `product-sale:${sale.id}`,
+                          date: sale.date,
+                          label: 'Produtos',
+                          description: sale.items.map(item =>
+                            `${item.productName} × ${item.quantity}${item.discountAmount > 0 ? ` · desconto ${brl(item.discountAmount)}` : ''}`,
+                          ).join(', '),
+                          amount: sale.total,
+                          sign: '+' as const,
+                          canDelete: false,
+                        })),
+                        ...mProductReversals.map(sale => ({
+                          id: `reversal:${sale.id}`,
+                          animationId: `product-reversal:${sale.id}`,
+                          date: sale.reversalDate!,
+                          label: 'Estorno',
+                          description: `Venda de produtos · ${sale.reversalReason || 'Motivo não informado'}`,
+                          amount: sale.total,
+                          sign: '-' as const,
+                          canDelete: false,
+                        })),
                          ...mIncomes.map(i => ({ id: i.id, animationId: `income:${i.id}`, date: i.date, label: 'Manual', description: i.description, amount: i.amount, sign: '+' as const, canDelete: true, onDelete: () => handleRemoveIncome(i.id), onEdit: () => startIncomeEdit(i) })),
                           ...mExpenses.map(e => ({ id: e.id, animationId: `expense:${e.id}`, date: e.date, label: 'Despesa', description: `${e.description} · ${e.category}${e.paymentMethod ? ` · ${PAY_LABELS[e.paymentMethod]}` : ''}`, amount: e.amount, sign: '-' as const, canDelete: true, onDelete: () => handleRemoveExpense(e.id), onEdit: () => startExpenseEdit(e) })),
                       ].sort((a, b) => b.date.localeCompare(a.date));
                       if (feed.length === 0) return <p className="text-sm text-muted-foreground text-center py-8">Nenhuma movimentação</p>;
                       return feed.map(item => (
-                        <div key={`${item.label}-${item.id}`} className={`p-3 bg-brand-bg rounded-lg border border-brand-border flex justify-between items-center group ${recentlyAddedFinanceIds.has(item.animationId) ? 'bm-list-item-enter' : ''}`}>
+                        <div data-testid={`finance-movement-${item.id}`} key={`${item.label}-${item.id}`} className={`p-3 bg-brand-bg rounded-lg border border-brand-border flex justify-between items-center group ${recentlyAddedFinanceIds.has(item.animationId) ? 'bm-list-item-enter' : ''}`}>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${item.sign === '+' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{item.label}</span>
@@ -1005,8 +1067,10 @@ export default function Financeiro() {
 
           {activeTab === 'Por Profissional' && (
             <div className="bg-brand-surface border border-brand-border rounded-2xl p-6">
-              <h3 className="text-lg font-bold text-foreground mb-2">Atendimentos e comissões por profissional</h3>
-              <p className="mb-6 text-xs text-muted-foreground">A receita é atribuída uma única vez a quem realizou o serviço; vendas aparecem separadamente e as comissões consideram os dois papéis.</p>
+              <div className="mb-4 flex items-center gap-1">
+                <h3 className="text-lg font-bold text-foreground">Atendimentos e comissões por profissional</h3>
+                <FeatureInfo label="Comissões por profissional">A receita do serviço é atribuída a quem o realizou. Vendas aparecem separadamente; as comissões consideram ambos os papéis.</FeatureInfo>
+              </div>
               {profData.length === 0 ? <p className="text-muted-foreground text-center py-12">Sem dados para este mês.</p> : (
                 <>
                   <div className="hidden md:block overflow-x-auto">
