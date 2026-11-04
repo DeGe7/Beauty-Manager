@@ -1,13 +1,16 @@
-import { useState } from 'react';
-import { useStore, brl, productStatus, Product } from '@/data/store';
+import { useRef, useState } from 'react';
+import { useStore, brl, productStatus, Product, PayMethod, ProductSaleDiscountType } from '@/data/store';
+import { FeatureInfo } from '@/components/FeatureInfo';
+import { formatDateKey } from '@/data/date';
+import { calculateProductSaleLine } from '@/data/product-sale';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Package, Plus, Trash2, Edit2, Check, X, AlertTriangle, ArrowUp, CheckCircle2 } from 'lucide-react';
+import { Package, Plus, Trash2, Edit2, Check, X, AlertTriangle, ArrowUp, CheckCircle2, ShoppingBag, Minus, ReceiptText, RotateCcw } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
 
 export default function Produtos() {
-  const { products, addProduct, updateProduct, removeProduct, restock, isLoading } = useStore();
+  const { products, clients, appointments, productSales, recordProductSale, reverseProductSale, addProduct, updateProduct, removeProduct, restock, isLoading } = useStore();
   const recentlyAddedProductIds = useRecentlyAddedIds(products, isLoading);
 
   const totalItems = products.length;
@@ -84,17 +87,118 @@ export default function Produtos() {
   };
 
   const [restockQs, setRestockQs] = useState<Record<string, string>>({});
+  type SaleLine = { key: number; productId: string; quantity: string; discountType: ProductSaleDiscountType; discountValue: string };
+  const lineKey = useRef(1);
+  const [saleClientId, setSaleClientId] = useState('');
+  const [saleAppointmentId, setSaleAppointmentId] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PayMethod>('pix');
+  const [saleLines, setSaleLines] = useState<SaleLine[]>([{ key: 1, productId: '', quantity: '1', discountType: 'amount', discountValue: '0' }]);
+  const [isSubmittingSale, setIsSubmittingSale] = useState(false);
+  const [selectedSaleId, setSelectedSaleId] = useState<string | null>(null);
+  const [reversalReason, setReversalReason] = useState('');
+  const [isReversingSale, setIsReversingSale] = useState(false);
+  const selectedSale = productSales.find(sale => sale.id === selectedSaleId);
+  const selectableProducts = products.filter(product => product.isActive);
+  const linkedAppointments = saleClientId
+    ? appointments.filter(appointment => appointment.clientId === saleClientId)
+    : appointments;
+  const getLineAmounts = (line: SaleLine) => {
+    const product = products.find(item => item.id === line.productId);
+    const quantity = Number(line.quantity);
+    const discountValue = Number(line.discountValue);
+    if (!product) return { product, subtotal: 0, discount: 0, total: 0, valid: false, error: '' };
+    try {
+      const calculated = calculateProductSaleLine(product.price, quantity, line.discountType, discountValue);
+      return { product, subtotal: calculated.subtotal, discount: calculated.discountAmount, total: calculated.total, valid: true, error: '' };
+    } catch (error) {
+      const subtotal = product.price * Math.max(0, Number.isFinite(quantity) ? quantity : 0);
+      return {
+        product,
+        subtotal,
+        discount: 0,
+        total: 0,
+        valid: false,
+        error: error instanceof Error ? error.message : 'Valores inválidos.',
+      };
+    }
+  };
+  const saleTotal = saleLines.reduce((sum, line) => sum + getLineAmounts(line).total, 0);
+  const updateSaleLine = (key: number, changes: Partial<SaleLine>) => {
+    setSaleLines(current => current.map(line => line.key === key ? { ...line, ...changes } : line));
+  };
+  const handleSaleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const validLines = saleLines.filter(line => line.productId);
+    if (!validLines.length) {
+      toast.error('Adicione ao menos um produto à venda');
+      return;
+    }
+    if (validLines.some(line => !Number.isInteger(Number(line.quantity)) || Number(line.quantity) < 1)) {
+      toast.error('Informe uma quantidade válida para cada produto');
+      return;
+    }
+    if (validLines.some(line => !Number.isFinite(Number(line.discountValue)) || Number(line.discountValue) < 0)) {
+      toast.error('Informe descontos válidos');
+      return;
+    }
+    if (validLines.some(line => !getLineAmounts(line).valid)) {
+      toast.error('Confira o desconto e a quantidade de cada item.');
+      return;
+    }
+    setIsSubmittingSale(true);
+    try {
+      const saved = await recordProductSale({
+        date: formatDateKey(),
+        ...(saleClientId ? { clientId: saleClientId } : {}),
+        ...(saleAppointmentId ? { appointmentId: saleAppointmentId } : {}),
+        paymentMethod,
+        items: validLines.map(line => ({
+          productId: line.productId,
+          quantity: Number(line.quantity),
+          discountType: line.discountType,
+          discountValue: Number(line.discountValue),
+        })),
+      });
+      if (!saved) return;
+      toast.success('Venda registrada');
+      setSaleClientId('');
+      setSaleAppointmentId('');
+      setPaymentMethod('pix');
+      setSaleLines([{ key: ++lineKey.current, productId: '', quantity: '1', discountType: 'amount', discountValue: '0' }]);
+    } finally {
+      setIsSubmittingSale(false);
+    }
+  };
   const handleRestock = async (id: string) => {
     const q = Number(restockQs[id]);
     if(q > 0 && await restock(id, q)) { toast.success('Estoque atualizado'); setRestockQs({...restockQs, [id]: ''}); }
+  };
+  const handleReverseSale = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    if (!selectedSale || reversalReason.trim().length < 3) {
+      toast.error('Informe um motivo com pelo menos 3 caracteres.');
+      return;
+    }
+    setIsReversingSale(true);
+    try {
+      const reversed = await reverseProductSale(selectedSale.id, reversalReason.trim());
+      if (!reversed) return;
+      toast.success('Estorno registrado. O estoque foi devolvido.');
+      setSelectedSaleId(null);
+      setReversalReason('');
+    } finally {
+      setIsReversingSale(false);
+    }
   };
 
   return (
     <div className="min-w-0 p-4 sm:p-5 md:p-8 space-y-5 md:space-y-6 max-w-7xl mx-auto">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Produtos & Estoque</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Acompanhe níveis e reponha itens com rapidez.</p>
+          <div className="flex items-center gap-1">
+            <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Produtos & Estoque</h2>
+            <FeatureInfo label="Produtos e estoque">Consulte níveis, cadastre produtos, registre vendas avulsas e reponha itens.</FeatureInfo>
+          </div>
         </div>
         {!isAdding && <button onClick={() => setIsAdding(true)} className="min-h-11 w-full md:w-auto justify-center bg-brand-gold text-brand-bg px-4 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2 transition-all"><Plus className="w-4 h-4"/> Adicionar Produto</button>}
       </div>
@@ -117,6 +221,234 @@ export default function Produtos() {
           </p>
         </div>
       </div>
+
+      <section data-testid="product-sale-section" className="overflow-hidden rounded-2xl border border-brand-border bg-brand-surface">
+        <div className="flex flex-col gap-3 border-b border-brand-border p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gold/10 text-brand-gold"><ShoppingBag className="h-5 w-5" /></div>
+            <div>
+              <div className="flex items-center gap-1">
+                <h3 className="font-bold text-foreground">Registrar venda de produtos</h3>
+                <FeatureInfo label="Venda de produtos">Registre produtos sem precisar lançar um atendimento. Cliente e agendamento são opcionais.</FeatureInfo>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-brand-gold/30 bg-brand-gold/5 px-4 py-2 text-left sm:text-right">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Total da venda</p>
+            <p data-testid="product-sale-total" className="text-xl font-bold tabular-nums text-brand-gold">{brl(saleTotal)}</p>
+          </div>
+        </div>
+        <form onSubmit={handleSaleSubmit} className="space-y-5 p-4 sm:p-5">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <label className="block text-xs font-semibold text-muted-foreground">
+              Data da venda
+              <input data-testid="product-sale-date" type="date" value={formatDateKey()} readOnly aria-readonly="true" className="mt-1.5 min-h-11 w-full rounded-lg border border-brand-border bg-brand-bg px-3 text-sm text-foreground outline-none" />
+            </label>
+            <label className="block text-xs font-semibold text-muted-foreground">
+              Cliente <span className="font-normal">(opcional)</span>
+              <select data-testid="product-sale-client" value={saleClientId} onChange={event => { setSaleClientId(event.target.value); setSaleAppointmentId(''); }} className="mt-1.5 min-h-11 w-full rounded-lg border border-brand-border bg-brand-bg px-3 text-sm text-foreground outline-none focus:border-brand-gold">
+                <option value="">Venda sem cliente</option>
+                {clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+              </select>
+            </label>
+            <label className="block text-xs font-semibold text-muted-foreground">
+              Agendamento <span className="font-normal">(opcional)</span>
+              <select data-testid="product-sale-appointment" value={saleAppointmentId} onChange={event => setSaleAppointmentId(event.target.value)} className="mt-1.5 min-h-11 w-full rounded-lg border border-brand-border bg-brand-bg px-3 text-sm text-foreground outline-none focus:border-brand-gold">
+                <option value="">Sem agendamento</option>
+                {linkedAppointments.map(appointment => (
+                  <option key={appointment.id} value={appointment.id}>{appointment.date} · {appointment.time} · {appointment.client} — {appointment.service}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs font-semibold text-muted-foreground">
+              Forma de pagamento
+              <select data-testid="product-sale-payment-method" value={paymentMethod} onChange={event => setPaymentMethod(event.target.value as PayMethod)} className="mt-1.5 min-h-11 w-full rounded-lg border border-brand-border bg-brand-bg px-3 text-sm text-foreground outline-none focus:border-brand-gold">
+                <option value="pix">PIX</option>
+                <option value="dinheiro">Dinheiro</option>
+                <option value="debito">Débito</option>
+                <option value="credito">Crédito</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-1">
+                  <h4 className="text-sm font-bold text-foreground">Itens da venda</h4>
+                  <FeatureInfo label="Desconto por produto">Escolha desconto em reais ou percentual para cada item. O total da linha considera preço, quantidade e desconto.</FeatureInfo>
+                </div>
+              </div>
+              <button type="button" data-testid="product-sale-add-item" disabled={!selectableProducts.length} onClick={() => setSaleLines(current => [...current, { key: ++lineKey.current, productId: '', quantity: '1', discountType: 'amount', discountValue: '0' }])} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-brand-border px-3 text-xs font-semibold text-brand-gold hover:bg-brand-gold/10 disabled:cursor-not-allowed disabled:opacity-50">
+                <Plus className="h-4 w-4" /> Adicionar item
+              </button>
+            </div>
+            {!selectableProducts.length && (
+              <div className="rounded-xl border border-dashed border-brand-border px-4 py-5 text-center text-sm text-muted-foreground">
+                Nenhum produto ativo disponível para venda.
+              </div>
+            )}
+            <div className="space-y-2">
+              {saleLines.map((line, index) => {
+                const amounts = getLineAmounts(line);
+                return (
+                  <div key={line.key} data-testid={`product-sale-item-${line.key}`} className="grid grid-cols-2 gap-3 rounded-xl border border-brand-border bg-brand-bg/60 p-3 sm:grid-cols-12 sm:items-end sm:gap-2">
+                    <label className="col-span-2 block text-[11px] font-semibold text-muted-foreground sm:col-span-4">
+                      Produto {index + 1}
+                      <select data-testid={`product-sale-product-${line.key}`} value={line.productId} onChange={event => updateSaleLine(line.key, { productId: event.target.value })} className="mt-1 min-h-11 w-full rounded-lg border border-brand-border bg-brand-surface px-3 text-sm text-foreground outline-none focus:border-brand-gold">
+                        <option value="">Selecione um produto</option>
+                        {selectableProducts.map(product => <option key={product.id} value={product.id}>{product.name} · {brl(product.price)}</option>)}
+                      </select>
+                    </label>
+                    <div className="col-span-1 text-[11px] font-semibold text-muted-foreground sm:col-span-2">
+                      Preço unitário
+                      <p data-testid={`product-sale-unit-price-${line.key}`} className="mt-1 flex min-h-11 items-center text-sm font-bold tabular-nums text-foreground">{amounts.product ? brl(amounts.product.price) : '—'}</p>
+                    </div>
+                    <label className="col-span-1 block text-[11px] font-semibold text-muted-foreground sm:col-span-1">
+                      Qtd.
+                      <input data-testid={`product-sale-quantity-${line.key}`} type="number" min="1" step="1" inputMode="numeric" value={line.quantity} onChange={event => updateSaleLine(line.key, { quantity: event.target.value })} className="mt-1 min-h-11 w-full rounded-lg border border-brand-border bg-brand-surface px-2 text-sm text-foreground outline-none focus:border-brand-gold" />
+                    </label>
+                    <label className="col-span-1 block text-[11px] font-semibold text-muted-foreground sm:col-span-2">
+                      Desconto
+                      <select data-testid={`product-sale-discount-type-${line.key}`} value={line.discountType} onChange={event => updateSaleLine(line.key, { discountType: event.target.value as ProductSaleDiscountType })} className="mt-1 min-h-11 w-full rounded-lg border border-brand-border bg-brand-surface px-2 text-sm text-foreground outline-none focus:border-brand-gold">
+                        <option value="amount">Valor R$</option>
+                        <option value="percent">Percentual %</option>
+                      </select>
+                    </label>
+                    <label className="col-span-1 block text-[11px] font-semibold text-muted-foreground sm:col-span-1">
+                      Valor
+                      <input data-testid={`product-sale-discount-value-${line.key}`} type="number" min="0" max={line.discountType === 'percent' ? 100 : amounts.product ? amounts.subtotal : undefined} step="0.01" inputMode="decimal" value={line.discountValue} onChange={event => updateSaleLine(line.key, { discountValue: event.target.value })} className="mt-1 min-h-11 w-full rounded-lg border border-brand-border bg-brand-surface px-2 text-sm text-foreground outline-none focus:border-brand-gold" />
+                    </label>
+                    <div className="col-span-1 min-w-0 text-[11px] font-semibold text-muted-foreground sm:col-span-1">
+                      Total item
+                      <p data-testid={`product-sale-line-total-${line.key}`} className="mt-1 flex min-h-11 items-center break-words text-sm font-bold tabular-nums text-brand-gold">{brl(amounts.total)}</p>
+                      {!amounts.valid && amounts.error && (
+                        <p className="col-span-full text-xs text-destructive" role="alert">{amounts.error}</p>
+                      )}
+                    </div>
+                    <button type="button" data-testid={`product-sale-remove-item-${line.key}`} aria-label={`Remover item ${index + 1}`} disabled={saleLines.length === 1} onClick={() => setSaleLines(current => current.filter(item => item.key !== line.key))} className="col-span-1 flex min-h-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30 sm:col-span-1">
+                      <Minus className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex flex-col-reverse gap-3 border-t border-brand-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <FeatureInfo label="Cálculo da venda">Preço unitário e total são calculados automaticamente para cada item.</FeatureInfo>
+            <button data-testid="product-sale-submit" type="submit" disabled={isSubmittingSale || !selectableProducts.length || !saleLines.some(line => line.productId)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-brand-gold px-5 text-sm font-bold text-brand-bg hover:bg-brand-gold/90 disabled:cursor-not-allowed disabled:opacity-50">
+              {isSubmittingSale ? <><span className="h-4 w-4 animate-pulse rounded-full border-2 border-brand-bg/30 border-t-brand-bg" /> Registrando venda…</> : <><Check className="h-4 w-4" /> Registrar venda</>}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section data-testid="product-sales-history" className="rounded-2xl border border-brand-border bg-brand-surface p-4 sm:p-5">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-bg text-muted-foreground"><ReceiptText className="h-4 w-4" /></div>
+          <div>
+            <div className="flex items-center gap-1">
+              <h3 className="font-bold text-foreground">Vendas recentes</h3>
+              <FeatureInfo label="Histórico de vendas">Mostra as vendas registradas e os valores praticados.</FeatureInfo>
+            </div>
+          </div>
+        </div>
+        {isLoading ? (
+          <div className="space-y-2" aria-label="Carregando vendas recentes">{[0, 1].map(index => <Skeleton key={index} className="h-16 w-full" />)}</div>
+        ) : productSales.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-brand-border px-4 py-8 text-center">
+            <ReceiptText className="mx-auto mb-2 h-6 w-6 text-muted-foreground/60" />
+            <p className="text-sm font-medium text-foreground">Nenhuma venda registrada</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {[...productSales].sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date)).slice(0, 8).map(sale => (
+              <article key={sale.id} data-testid={`product-sale-snapshot-${sale.id}`} className="rounded-xl border border-brand-border/80 bg-brand-bg/50 p-3 sm:p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-brand-border/70 pb-2">
+                  <p data-testid={`product-sale-snapshot-date-${sale.id}`} className="text-xs font-semibold text-muted-foreground">{new Date(`${sale.date}T12:00:00`).toLocaleDateString('pt-BR')}</p>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span data-testid={`product-sale-snapshot-method-${sale.id}`} className="rounded-full bg-brand-surface px-2.5 py-1 font-medium text-foreground">{({ pix: 'PIX', dinheiro: 'Dinheiro', debito: 'Débito', credito: 'Crédito' })[sale.paymentMethod]}</span>
+                    {sale.reversalDate && <span data-testid={`product-sale-reversed-status-${sale.id}`} className="rounded-full bg-destructive/10 px-2.5 py-1 font-semibold text-destructive">Estornada</span>}
+                    <span className="text-muted-foreground">Total original</span>
+                    <strong data-testid={`product-sale-snapshot-total-${sale.id}`} className="text-sm tabular-nums text-brand-gold">{brl(sale.total)}</strong>
+                  </div>
+                </div>
+                <div className="divide-y divide-brand-border/50">
+                  {sale.items.map((item, index) => (
+                    <div key={`${sale.id}-${item.productId}-${index}`} data-testid={`product-sale-snapshot-item-${sale.id}-${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 py-2 text-xs sm:grid-cols-[minmax(0,1.5fr)_repeat(4,minmax(70px,auto))] sm:items-center">
+                      <p className="min-w-0 break-words font-semibold text-foreground">{item.productName}</p>
+                      <span className="text-right tabular-nums text-muted-foreground sm:text-left">{brl(item.unitPrice)} / un.</span>
+                      <span className="text-muted-foreground">Qtd. <strong className="text-foreground">{item.quantity}</strong></span>
+                      <span className="text-muted-foreground">Desc. <strong className="text-foreground">{item.discountAmount > 0 ? `${brl(item.discountAmount)}${item.discountType === 'percent' ? ` (${item.discountValue}%)` : ''}` : '—'}</strong></span>
+                      <span className="text-right font-bold tabular-nums text-foreground sm:text-left">{brl(item.total)}</span>
+                    </div>
+                  ))}
+                </div>
+                {sale.reversalDate ? (
+                  <div data-testid={`product-sale-reversal-${sale.id}`} className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-xs">
+                    <p className="font-semibold text-destructive">Estorno em {new Date(`${sale.reversalDate}T12:00:00`).toLocaleDateString('pt-BR')} · {brl(sale.total)}</p>
+                    <p className="mt-1 break-words text-muted-foreground">Motivo: {sale.reversalReason || 'Não informado'}</p>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid={`product-sale-reverse-${sale.id}`}
+                    onClick={() => { setSelectedSaleId(sale.id); setReversalReason(''); }}
+                    className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-destructive/30 px-3 text-xs font-semibold text-destructive hover:bg-destructive/10"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Estornar venda
+                  </button>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <AlertDialog
+        open={Boolean(selectedSale)}
+        onOpenChange={open => {
+          if (!open && !isReversingSale) {
+            setSelectedSaleId(null);
+            setReversalReason('');
+          }
+        }}
+      >
+        <AlertDialogContent className="border-brand-border bg-brand-surface text-foreground">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar estorno da venda?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedSale
+                ? `O valor de ${brl(selectedSale.total)} será lançado como estorno e ${selectedSale.items.reduce((sum, item) => sum + item.quantity, 0)} unidade(s) voltarão ao estoque. O registro original será preservado.`
+                : 'O registro original será preservado.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <label className="space-y-1.5 text-sm font-medium text-foreground">
+            Motivo do estorno
+            <textarea
+              data-testid="product-sale-reversal-reason"
+              value={reversalReason}
+              onChange={event => setReversalReason(event.target.value)}
+              maxLength={500}
+              rows={3}
+              placeholder="Descreva por que a venda está sendo estornada"
+              className="w-full resize-y rounded-lg border border-brand-border bg-brand-bg p-3 text-sm outline-none focus:border-brand-gold"
+            />
+          </label>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isReversingSale} className="border-brand-border bg-brand-bg">Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="product-sale-reversal-confirm"
+              disabled={isReversingSale || reversalReason.trim().length < 3}
+              onClick={handleReverseSale}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              {isReversingSale ? 'Estornando…' : 'Confirmar estorno'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {isAdding && (
         <div className="bg-brand-bg border border-brand-gold p-4 sm:p-5 rounded-xl shadow-[0_0_15px_rgba(201,168,76,0.1)]">
