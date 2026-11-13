@@ -12,9 +12,10 @@
     "e2e:structure": "node e2e/check-structure.mjs",
     "e2e:commission:test": "node --experimental-strip-types --test e2e/appointment-commissions.test.mjs",
     "e2e:product-sale:test": "node --experimental-strip-types --test e2e/product-sale.test.mjs",
+    "e2e:attendance-delete:test": "node --experimental-strip-types --test e2e/attendance-deletion-policy.test.mjs",
     "e2e:supabase-env:test": "node --test e2e/supabase-env-config.test.mjs",
     "e2e:provision:test": "node --experimental-strip-types --test e2e/provision-interruption.test.mjs",
-    "e2e:validate": "pnpm run e2e:typecheck && pnpm run e2e:commission:test && pnpm run e2e:product-sale:test && pnpm run e2e:structure:test && pnpm run e2e:supabase-env:test && pnpm run e2e:provision:test && pnpm run e2e:structure",
+    "e2e:validate": "pnpm run e2e:typecheck && pnpm run e2e:commission:test && pnpm run e2e:product-sale:test && pnpm run e2e:attendance-delete:test && pnpm run e2e:structure:test && pnpm run e2e:supabase-env:test && pnpm run e2e:provision:test && pnpm run e2e:structure",
     "e2e": "pnpm run e2e:validate && playwright test --config=e2e/playwright.config.ts",
     "e2e:isolated": "E2E_PROVISION=true E2E_START_SERVER=true pnpm e2e"
   },
