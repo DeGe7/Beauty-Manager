@@ -8,7 +8,7 @@ begin;
 
 create extension if not exists pgtap;
 
-select plan(196);
+select plan(220);
 select is(to_regclass('public.chatwoot_integrations'), null::regclass, 'Chatwoot integration table is removed');
 
 select is(
@@ -371,7 +371,7 @@ select is(public.current_professional_id(), null::text, 'reception account has n
 select is(
   public.has_permission('agenda') and public.has_permission('controle')
     and public.has_permission('clientes') and public.has_permission('produtos')
-    and public.has_permission('planos') and public.has_permission('comunicacao'),
+    and public.has_permission('planos'),
   true,
   'reception has its operational module permissions'
 );
@@ -409,7 +409,7 @@ select is(
   '2026-10-01',
   'confirmed payment advances the subscriber due date'
 );
-select is((select count(*) from public.professionals), 6::bigint, 'reception can read company professionals');
+select is((select count(*) from public.professionals), 5::bigint, 'reception sees only the five professionals in its organization');
 select is((select count(*) from public.clients where id = 'client-a-reception'), 1::bigint, 'reception can read clients');
 select is((select count(*) from public.products where id = 'product-a-reception'), 1::bigint, 'reception can read products');
 select lives_ok(
@@ -552,6 +552,7 @@ select throws_ok(
 reset role;
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000002', true);
 set local role authenticated;
+select is(public.is_manager(), false, 'an account without an active salon is never treated as a manager');
 select ok(
   not has_function_privilege('authenticated', 'public.enforce_email_only_join_requests()', 'EXECUTE'),
   'email-only join request guard is not callable by clients'
@@ -645,8 +646,8 @@ select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001
 set local role authenticated;
 select is(
   cardinality(public.cleanup_historical_organization_invitations()),
-  2,
-  'manager cleanup removes only expired or revoked invitations from current organization'
+  3,
+  'manager cleanup removes expired, revoked, and newly revoked invitations from current organization'
 );
 reset role;
 select is((select count(*) from public.organization_invitations where id in ('f1000000-0000-0000-0000-000000000011', 'f1000000-0000-0000-0000-000000000012')), 0::bigint, 'expired and revoked invitations from current organization were deleted');
@@ -764,7 +765,7 @@ select is(
 );
 select is(
   (public.clear_organization_history('finance') ->> 'deleted_count')::bigint,
-  2::bigint,
+  4::bigint,
   'manager bulk cleanup removes own organization finance records'
 );
 reset role;
@@ -773,6 +774,11 @@ select is(
   + (select count(*) from public.incomes where organization_id = '11111111-1111-1111-1111-111111111111'),
   0::bigint,
   'finance cleanup removes organization A records'
+);
+select is(
+  (select count(*) from public.finance_entry_changes where organization_id = '11111111-1111-1111-1111-111111111111'),
+  0::bigint,
+  'finance cleanup also removes organization A financial change history'
 );
 select is(
   (select count(*) from public.expenses where organization_id = '22222222-2222-2222-2222-222222222222')
@@ -862,6 +868,95 @@ select is(
   1::bigint,
   'attempted appointment cleanup leaves another organization appointment untouched'
 );
+
+reset role;
+insert into public.organization_members (organization_id, user_id, role)
+values ('22222222-2222-2222-2222-222222222222', '10000000-0000-0000-0000-000000000001', 'gestor');
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
+set local role authenticated;
+select is(
+  public.current_organization_id(),
+  '11111111-1111-1111-1111-111111111111'::uuid,
+  'account defaults to its selected salon'
+);
+select is(
+  (select count(*) from public.list_my_organizations()),
+  2::bigint,
+  'account can list only its two active salon memberships'
+);
+select lives_ok(
+  $$select public.switch_current_organization('22222222-2222-2222-2222-222222222222')$$,
+  'account can switch to another active salon'
+);
+select is(
+  public.current_organization_id(),
+  '22222222-2222-2222-2222-222222222222'::uuid,
+  'switch changes the active tenant context'
+);
+select is(
+  (select count(*) from public.appointments where id = 'cleanup-foreign-b'),
+  1::bigint,
+  'after switching, the member can read data from the selected salon'
+);
+select throws_ok(
+  $$select public.switch_current_organization('33333333-3333-3333-3333-333333333333')$$,
+  'P0001',
+  'active organization membership required',
+  'account cannot switch to a salon without membership'
+);
+select lives_ok(
+  $$select public.switch_current_organization('11111111-1111-1111-1111-111111111111')$$,
+  'account can switch back to its original salon'
+);
+select is(
+  public.current_organization_id(),
+  '11111111-1111-1111-1111-111111111111'::uuid,
+  'switching back restores the original tenant context'
+);
+select lives_ok(
+  $$update public.appointments set status = 'cancelled' where id = 'cleanup-foreign-b'$$,
+  'update against an unselected salon is safely scoped to zero rows'
+);
+select is(
+  (select count(*) from public.appointments where id = 'cleanup-foreign-b'),
+  0::bigint,
+  'unselected salon records are hidden after switching back'
+);
+reset role;
+select is(
+  (select status from public.appointments where id = 'cleanup-foreign-b'),
+  'completed',
+  'a cross-salon update attempt does not change the other salon record'
+);
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
+set local role authenticated;
+select lives_ok(
+  $$select public.bootstrap_organization('Terceiro salão do gestor', '', '')$$,
+  'an existing salon manager can create another salon'
+);
+select is(
+  (select count(*) from public.list_my_organizations()),
+  3::bigint,
+  'the same account now has three isolated salon memberships'
+);
+select is(
+  public.current_organization_id(),
+  (select default_organization_id from public.profiles where id = auth.uid()),
+  'the newly created salon becomes the active context'
+);
+reset role;
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000005', true);
+set local role authenticated;
+select lives_ok(
+  $$select public.bootstrap_organization('Primeiro salão do usuário', '', '')$$,
+  'an unlinked account can create its first salon'
+);
+select is(
+  public.current_user_role(),
+  'gestor',
+  'the creator receives manager access to the first salon'
+);
+reset role;
 
 select * from finish();
 rollback;
