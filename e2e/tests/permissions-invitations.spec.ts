@@ -7,20 +7,106 @@ import {
   receptionAttendance,
   requireAccount,
   test,
+  waitForMutation,
 } from '../fixtures';
+import {
+  createE2EJoinRequest,
+  getFixtureOrganizationId,
+  professionalHistoryRequest,
+  setE2EOrganizationCreationEnabled,
+} from '../provision';
+
+async function submitPublicJoinRequest(
+  page: Parameters<typeof loginAs>[0],
+  applicantName: string,
+  applicantEmail: string,
+) {
+  const organizationId = getFixtureOrganizationId();
+  if (!organizationId) throw new Error('The disposable E2E organization is unavailable.');
+  if (process.env.E2E_PROVISION === 'true') {
+    await page.route('**/rpc/request_organization_join*', async route => {
+      const requestRow = await createE2EJoinRequest({ applicantName, applicantEmail });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(requestRow),
+      });
+    });
+  }
+
+  await page.goto(`/solicitar-acesso?organization=${encodeURIComponent(organizationId)}`);
+  await page.getByLabel('Nome e sobrenome').fill(applicantName);
+  await page.getByLabel('E-mail para receber o convite').fill(applicantEmail);
+  await page.getByRole('button', { name: 'Enviar pedido ao gestor', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Pedido enviado', exact: true })).toBeVisible();
+}
 
 test.describe('visibilidade e restrições por papel', () => {
+  test('gestor alterna entre salões sem permanecer no contexto anterior', async ({ page }) => {
+    test.skip(
+      process.env.E2E_PROVISION !== 'true' || !accounts.manager,
+      'Requires the isolated multi-salon E2E fixtures.',
+    );
+    await loginAs(page, requireAccount(accounts.manager, 'manager'));
+    const selector = page.getByLabel('Salão ativo');
+    await expect(selector).toBeVisible();
+    await expect(selector.locator('option')).toHaveCount(2);
+    const originalOrganizationId = await selector.inputValue();
+    const secondaryOption = selector.locator('option').filter({ hasText: 'Salão secundário E2E' });
+    const secondaryOrganizationId = await secondaryOption.getAttribute('value');
+    expect(secondaryOrganizationId).toBeTruthy();
+    if (!secondaryOrganizationId) throw new Error('Secondary E2E organization is missing from the selector.');
+
+    await selector.selectOption(secondaryOrganizationId);
+    await expect(selector).toHaveValue(secondaryOrganizationId);
+    await page.reload();
+    await expect(selector).toHaveValue(secondaryOrganizationId);
+
+    await selector.selectOption(originalOrganizationId);
+    await expect(selector).toHaveValue(originalOrganizationId);
+  });
+
+  test('gestor cria outro salão e ele aparece na lista de troca', async ({ page }) => {
+    test.skip(
+      process.env.E2E_PROVISION !== 'true' || !accounts.manager,
+      'Requires the isolated multi-salon E2E fixtures.',
+    );
+    await setE2EOrganizationCreationEnabled(true);
+    try {
+      await loginAs(page, requireAccount(accounts.manager, 'manager'));
+      await page.goto('/onboarding');
+      await expect(
+        page.getByRole('heading', { name: 'Adicionar outro salão', exact: true }),
+      ).toBeVisible();
+      const salonName = `Salão criado E2E ${Date.now()}`;
+      await page.getByLabel('Nome do estabelecimento').fill(salonName);
+      await page.getByRole('button', { name: 'Criar salão', exact: true }).click();
+      await expect(page).toHaveURL(/\/$/);
+
+      const selector = page.getByLabel('Salão ativo');
+      await expect(selector.locator('option')).toHaveCount(3);
+      const newSalonOption = selector.locator('option').filter({ hasText: salonName });
+      const newSalonId = await newSalonOption.getAttribute('value');
+      expect(newSalonId).toBeTruthy();
+      if (!newSalonId) throw new Error('The newly created salon is missing from the selector.');
+      await expect(selector).toHaveValue(newSalonId);
+      await page.reload();
+      await expect(selector).toHaveValue(newSalonId);
+    } finally {
+      await setE2EOrganizationCreationEnabled(false);
+    }
+  });
+
   test('profissional sem conta solicita acesso; gestor aprova e emite convite', async ({ page }) => {
-    test.skip(!accounts.manager, 'Requires the provisioned manager account.');
+    test.skip(
+      !accounts.manager || !getFixtureOrganizationId(),
+      'Requires the isolated organization and manager E2E fixtures.',
+    );
     const manager = requireAccount(accounts.manager, 'manager');
     const applicantEmail = `request-${Date.now()}@example.test`;
     const applicantName = 'Profissional sem conta E2E';
 
-    await page.goto('/solicitar-acesso');
-    await page.getByLabel('Nome e sobrenome').fill(applicantName);
-    await page.getByLabel('E-mail para receber o convite').fill(applicantEmail);
-    await page.getByRole('button', { name: 'Enviar pedido ao gestor', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Pedido enviado', exact: true })).toBeVisible();
+    await submitPublicJoinRequest(page, applicantName, applicantEmail);
 
     const browser = page.context().browser();
     if (!browser) throw new Error('Could not create an isolated browser context for the manager.');
@@ -103,11 +189,7 @@ test.describe('visibilidade e restrições por papel', () => {
     const applicantEmail = `restore-request-${Date.now()}@example.test`;
     const applicantName = 'Profissional restaurado E2E';
 
-    await page.goto('/solicitar-acesso');
-    await page.getByLabel('Nome e sobrenome').fill(applicantName);
-    await page.getByLabel('E-mail para receber o convite').fill(applicantEmail);
-    await page.getByRole('button', { name: 'Enviar pedido ao gestor', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Pedido enviado', exact: true })).toBeVisible();
+    await submitPublicJoinRequest(page, applicantName, applicantEmail);
 
     const browser = page.context().browser();
     if (!browser) throw new Error('Could not create an isolated browser context for the manager.');
@@ -142,8 +224,8 @@ test.describe('visibilidade e restrições por papel', () => {
       await expect(requestRow).toBeVisible();
       await expect(requestRow.getByText('Recusado', { exact: true })).toBeVisible();
       await requestRow.locator('summary').filter({ hasText: 'Histórico do pedido' }).click();
-      await expect(managerPage.getByText('Pedido movido para Arquivados', { exact: true })).toBeVisible();
-      await expect(managerPage.getByText('Pedido restaurado para a lista principal', { exact: true })).toBeVisible();
+      await expect(managerPage.getByText(/^Pedido movido para Arquivados\b/)).toBeVisible();
+      await expect(managerPage.getByText(/^Pedido restaurado para a lista principal\b/)).toBeVisible();
 
       await managerPage.reload();
       await openModule(managerPage, '/profissionais', 'Profissionais');
@@ -165,11 +247,7 @@ test.describe('visibilidade e restrições por papel', () => {
     const applicantEmail = `auto-archive-request-${Date.now()}@example.test`;
     const applicantName = 'Profissional arquivado automaticamente E2E';
 
-    await page.goto('/solicitar-acesso');
-    await page.getByLabel('Nome e sobrenome').fill(applicantName);
-    await page.getByLabel('E-mail para receber o convite').fill(applicantEmail);
-    await page.getByRole('button', { name: 'Enviar pedido ao gestor', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Pedido enviado', exact: true })).toBeVisible();
+    await submitPublicJoinRequest(page, applicantName, applicantEmail);
 
     const browser = page.context().browser();
     if (!browser) throw new Error('Could not create an isolated browser context for the manager.');
@@ -206,8 +284,8 @@ test.describe('visibilidade e restrições por papel', () => {
       await expect(archivedRow).toContainText(applicantName);
       await expect(archivedRow).toContainText('Arquivado automaticamente após 5 minutos');
       await archivedRow.locator('summary').filter({ hasText: 'Histórico do pedido' }).click();
-      await expect(archivedRow.getByText('Pedido enviado', { exact: true })).toBeVisible();
-      await expect(archivedRow.getByText('Pedido recusado', { exact: true })).toBeVisible();
+      await expect(archivedRow.getByText(/^Pedido enviado\b/)).toBeVisible();
+      await expect(archivedRow.getByText(/^Pedido recusado\b/)).toBeVisible();
 
       await managerPage.reload();
       await openModule(managerPage, '/profissionais', 'Profissionais');
@@ -218,14 +296,22 @@ test.describe('visibilidade e restrições por papel', () => {
       await expect(refreshedArchivedRow).toBeVisible();
       await expect(refreshedArchivedRow).toContainText(applicantName);
       await refreshedArchivedRow.locator('summary').filter({ hasText: 'Histórico do pedido' }).click();
-      await expect(refreshedArchivedRow.getByText('Pedido enviado', { exact: true })).toBeVisible();
-      await expect(refreshedArchivedRow.getByText('Pedido recusado', { exact: true })).toBeVisible();
+      await expect(refreshedArchivedRow.getByText(/^Pedido enviado\b/)).toBeVisible();
+      await expect(refreshedArchivedRow.getByText(/^Pedido recusado\b/)).toBeVisible();
     } finally {
       await managerContext.close();
     }
   });
 
-  test('mostra prazo de nova tentativa ao atingir o limite público e mantém o envio por telefone', async ({ page }) => {
+  test('mostra prazo de nova tentativa ao atingir o limite público de pedidos por e-mail', async ({ page }) => {
+    const organizationId = '31111111-1111-1111-1111-111111111111';
+    await page.route('**/rpc/get_public_organization_name*', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify('Salão E2E'),
+      }),
+    );
     await page.route('**/rest/v1/rpc/request_organization_join', route =>
       route.fulfill({
         status: 200,
@@ -234,7 +320,7 @@ test.describe('visibilidade e restrições por papel', () => {
       }),
     );
 
-    await page.goto('/solicitar-acesso');
+    await page.goto(`/solicitar-acesso?organization=${organizationId}`);
     await page.getByLabel('Nome e sobrenome').fill('Profissional teste limite');
     await page.getByLabel('E-mail para receber o convite').fill('limite@example.test');
     await page.getByRole('button', { name: 'Enviar pedido ao gestor', exact: true }).click();
@@ -242,18 +328,14 @@ test.describe('visibilidade e restrições por papel', () => {
       'Muitos pedidos foram enviados recentemente. Aguarde cerca de 30 minutos e tente novamente.',
     );
 
-    await page.getByRole('button', { name: 'Telefone', exact: true }).click();
-    await expect(page.getByLabel('Telefone para receber o convite')).toBeVisible();
-    await page.getByLabel('Telefone para receber o convite').fill('+55 11 99999-9999');
-    await page.getByRole('button', { name: 'Enviar pedido ao gestor', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Aguarde cerca de 30 minutos');
+    await expect(page.getByRole('button', { name: 'Telefone', exact: true })).toHaveCount(0);
   });
 
-  test('bloqueia cadastro sem convite', async ({ page }) => {
+  test('permite iniciar cadastro de um novo salão sem convite', async ({ page }) => {
     await page.goto('/cadastro');
-    await expect(page.getByRole('heading', { name: 'Cadastro somente por convite', exact: true })).toBeVisible();
-    await expect(page.getByLabel('Nome e sobrenome')).toHaveCount(0);
-    await expect(page.getByRole('link', { name: 'Solicitar autorização', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Criar conta do salão', exact: true })).toBeVisible();
+    await expect(page.getByLabel('Nome e sobrenome')).toBeVisible();
+    await expect(page.getByLabel('E-mail')).toBeVisible();
   });
 
   test('bloqueia bootstrap direto em modo fechado', async ({ page }) => {
@@ -337,15 +419,15 @@ test.describe('visibilidade e restrições por papel', () => {
     const expectedByPeriod = {
       Diária: [
         ['Profissional operacional E2E', '110,00', '68,75%'],
-        ['Profissional customizado E2E', '50,00', '31,25%'],
+        ['Profissional convidado E2E', '50,00', '31,25%'],
       ],
       Semanal: [
-        ['Profissional operacional E2E', '310,00', '86,11%'],
-        ['Profissional customizado E2E', '50,00', '13,89%'],
+        ['Profissional operacional E2E', '610,00', '92,42%'],
+        ['Profissional convidado E2E', '50,00', '7,58%'],
       ],
       Mensal: [
-        ['Profissional customizado E2E', '350,00', '53,03%'],
-        ['Profissional operacional E2E', '310,00', '46,97%'],
+        ['Profissional operacional E2E', '610,00', '63,54%'],
+        ['Profissional convidado E2E', '350,00', '36,46%'],
       ],
     } as const;
 
@@ -380,7 +462,7 @@ test.describe('visibilidade e restrições por papel', () => {
     await expect(card.getByTestId('revenue-professional-row')).toHaveCount(0);
   });
 
-  test('profissional operacional vê apenas a operação autorizada e recebe acesso restrito', async ({ page }) => {
+  test('profissional operacional acessa sua operação e o Financeiro individual', async ({ page }) => {
     test.skip(!accounts.operational, 'Requires E2E_OPERATIONAL_EMAIL and E2E_OPERATIONAL_PASSWORD.');
     await loginAs(page, requireAccount(accounts.operational, 'operational'));
     await openModule(page, '/dashboard', 'Visão geral');
@@ -389,15 +471,155 @@ test.describe('visibilidade e restrições por papel', () => {
     for (const label of ['Controle Diário', 'Agenda']) {
       await expect(page.getByRole('complementary').getByRole('link', { name: label, exact: true })).toBeVisible();
     }
-    for (const label of ['Profissionais', 'Produtos & Estoque', 'Financeiro', 'Configurações']) {
+    await expect(page.getByRole('complementary').getByRole('link', { name: 'Financeiro', exact: true })).toBeVisible();
+    for (const label of ['Profissionais', 'Produtos & Estoque', 'Configurações']) {
       await expect(page.getByRole('link', { name: label, exact: true })).toHaveCount(0);
     }
+    await openModule(page, '/financeiro', 'Financeiro');
+    await expect(page.getByRole('region', { name: 'Meus ganhos', exact: true })).toBeVisible();
+    await expect(page.getByTestId('finance-plan-receipts')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="finance-movement-"]')).toHaveCount(0);
+    await openModule(page, '/dashboard', 'Visão geral');
     await page.goto('/produtos');
     await expect(page.getByRole('heading', { name: 'Acesso Restrito', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Adicionar Produto', exact: true })).toHaveCount(0);
     await page.goto('/profissionais');
     await expect(page.getByRole('heading', { name: 'Acesso Restrito', exact: true })).toBeVisible();
     await expect(page.getByTestId('invitation-history-row')).toHaveCount(0);
+  });
+
+  test('profissional não pode excluir atendimento com mais de 24 horas', async ({ page }) => {
+    test.skip(
+      !accounts.operational || !receptionAttendance.current || process.env.E2E_PROVISION !== 'true',
+      'Requires a provisioned operational profile and disposable attendance fixture.',
+    );
+    const fixture = receptionAttendance.current!;
+    const seededAppointments = await professionalHistoryRequest('appointments', 'GET');
+    const oldAttendance = seededAppointments.find(appointment =>
+      appointment.professional_id === fixture.professionalId &&
+      String(appointment.client).startsWith('Cliente faturamento hoje'),
+    );
+    expect(oldAttendance?.id).toBeTruthy();
+
+    await loginAs(page, requireAccount(accounts.operational, 'operational'));
+    await openModule(page, '/controle', 'Controle Diário');
+    const expiredAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    await page.route('**/rest/v1/appointments**', async route => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const appointments = await response.json() as Array<Record<string, unknown>>;
+      await route.fulfill({
+        response,
+        json: appointments.map(appointment => String(appointment.id) === String(oldAttendance!.id)
+          ? { ...appointment, attendance_recorded_at: expiredAt }
+          : appointment),
+      });
+    });
+    await page.reload();
+
+    const clientName = String(oldAttendance!.client);
+    const deleteButton = page.getByRole('button', {
+      name: `Excluir atendimento de ${clientName} (prazo de 24 horas encerrado)`,
+      exact: true,
+    });
+    await expect(deleteButton).toBeDisabled();
+    await expect(page.getByRole('row').filter({ hasText: clientName })).toBeVisible();
+  });
+
+  test('Financeiro restringe cada profissional aos próprios ganhos', async ({ page }) => {
+    test.skip(
+      !accounts.operational ||
+        !accounts.invited ||
+        process.env.E2E_PROVISION !== 'true' ||
+        !process.env.E2E_SUPABASE_TEST_URL,
+      'Requires two provisioned professionals, isolated revenue fixtures, and the E2E Supabase URL.',
+    );
+
+    const professionals = await professionalHistoryRequest('professionals', 'GET');
+    const professionalIds = new Map(
+      professionals.map(professional => [String(professional.name), String(professional.id)]),
+    );
+    const profiles = [
+      {
+        account: requireAccount(accounts.operational, 'operational'),
+        ownName: 'Profissional operacional E2E',
+        otherName: 'Profissional convidado E2E',
+        expectsProsthesisCommission: true,
+      },
+      {
+        account: requireAccount(accounts.invited, 'invited'),
+        ownName: 'Profissional convidado E2E',
+        otherName: 'Profissional operacional E2E',
+        expectsProsthesisCommission: false,
+      },
+    ] as const;
+
+    for (const profile of profiles) {
+      const otherProfessionalId = professionalIds.get(profile.otherName);
+      expect(otherProfessionalId, `fixture for ${profile.otherName}`).toBeTruthy();
+      await loginAs(page, profile.account);
+
+      const earningsRpcs = [
+        'get_my_financial_earnings',
+        'get_my_plan_usage_earnings',
+        'get_my_manual_appointment_commissions',
+      ] as const;
+      const ownRequestPromises = earningsRpcs.map(rpcName => page.waitForRequest(request =>
+        request.url().includes(`/rest/v1/rpc/${rpcName}`) && request.method() === 'POST',
+      ));
+      const ownResponsePromise = page.waitForResponse(response =>
+        response.url().includes('/rest/v1/rpc/get_my_financial_earnings') &&
+        response.request().method() === 'POST' && response.ok(),
+      );
+      await openModule(page, '/financeiro', 'Financeiro');
+
+      const [ownRequests, ownResponse] = await Promise.all([
+        Promise.all(ownRequestPromises),
+        ownResponsePromise,
+      ]);
+      const requestHeaders = await ownRequests[0].allHeaders();
+      for (const request of ownRequests) {
+        const requestBody = request.postDataJSON() as { p_professional_id?: string | null };
+        expect(requestBody.p_professional_id ?? null).toBeNull();
+      }
+      const ownEarnings = await ownResponse.json() as Array<Record<string, unknown>>;
+      expect(ownEarnings.length).toBeGreaterThan(0);
+      if (profile.expectsProsthesisCommission) {
+        expect(ownEarnings.some(earning =>
+          earning.source === 'Comissão por aplicação de prótese capilar' &&
+          Number(earning.amount) === 140,
+        )).toBe(true);
+      }
+
+      const personalPanel = page.getByRole('region', { name: 'Meus ganhos', exact: true });
+      await expect(personalPanel.getByRole('heading', { name: `Ganhos de ${profile.ownName}`, exact: true })).toBeVisible();
+      await expect(personalPanel.getByText('Nenhum ganho registrado neste período.', { exact: true })).toHaveCount(0);
+      await expect(page.getByTestId('finance-plan-receipts')).toHaveCount(0);
+      await expect(page.locator('[data-testid^="finance-movement-"]')).toHaveCount(0);
+
+      const supabaseUrl = process.env.E2E_SUPABASE_TEST_URL!.trim().replace(/\/+$/, '');
+      for (const rpcName of earningsRpcs) {
+        const otherEarningsResponse = await page.request.post(
+          `${supabaseUrl}/rest/v1/rpc/${rpcName}`,
+          {
+            headers: {
+              apikey: requestHeaders.apikey,
+              authorization: requestHeaders.authorization,
+            },
+            data: {
+              p_start_date: '2020-01-01',
+              p_end_date: '2100-12-31',
+              p_professional_id: otherProfessionalId,
+            },
+          },
+        );
+        expect(otherEarningsResponse.ok(), `${rpcName} must not return another person's earnings`).toBe(false);
+        expect(await otherEarningsResponse.text()).toContain('cannot_request_another_professional_earnings');
+      }
+    }
   });
 
   test('recepção acessa somente os módulos autorizados e registra atendimento para o profissional correto', async ({ page }) => {
@@ -482,6 +704,33 @@ test.describe('visibilidade e restrições por papel', () => {
     await expect(page.getByText('Cliente recepção E2E')).toBeVisible();
     const recordedReceptionAttendance = page.getByRole('article').filter({ hasText: 'Cliente recepção E2E' });
     await expect(recordedReceptionAttendance).toContainText('Profissional operacional E2E');
+
+    const deleteAttendance = recordedReceptionAttendance.getByRole('button', {
+      name: 'Excluir atendimento de Cliente recepção E2E',
+      exact: true,
+    });
+    await expect(deleteAttendance).toBeEnabled();
+    const attendanceDeleteResponse = waitForMutation(page, 'appointments', 'DELETE');
+    await deleteAttendance.click();
+    await page.getByRole('alertdialog').getByRole('button', {
+      name: 'Excluir atendimento',
+      exact: true,
+    }).click();
+    await attendanceDeleteResponse;
+    await expect(recordedReceptionAttendance).toHaveCount(0);
+
+    await openModule(page, '/clientes', 'Clientes');
+    await page.getByPlaceholder('Buscar por nome, email ou whatsapp...').fill('Cliente recepção E2E');
+    const deleteClient = page.getByRole('button', {
+      name: 'Excluir Cliente recepção E2E',
+      exact: true,
+    });
+    await expect(deleteClient).toBeVisible();
+    const clientDeleteResponse = waitForMutation(page, 'clients', 'DELETE');
+    await deleteClient.click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Excluir', exact: true }).click();
+    await clientDeleteResponse;
+    await expect(page.getByText('Cliente recepção E2E', { exact: true })).toHaveCount(0);
   });
 
   test('papel customizado respeita o módulo permitido e bloqueia o módulo removido', async ({ page }) => {
@@ -502,8 +751,12 @@ test.describe('convites da equipe', () => {
     test.skip(!token, 'Requires E2E_INVITATION_TOKEN from a pending invitation.');
     await page.goto(`/convite/${encodeURIComponent(token!)}`);
     await expect(page.getByRole('heading', { name: 'Convite para a equipe', exact: true })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Já tenho uma conta', exact: true })).toHaveAttribute('href', /convite=/);
-    await expect(page.getByRole('link', { name: 'Criar minha conta', exact: true })).toHaveAttribute('href', /convite=/);
+    await page.getByTestId('button-enter-invited-company').click();
+    await expect(page.getByTestId('input-invitation-email')).toHaveValue(/@/);
+    await expect(page.getByTestId('link-login-from-invitation')).toHaveAttribute(
+      'href',
+      new RegExp(`convite=${encodeURIComponent(token!)}`),
+    );
   });
 
   test('cadastro abre somente para um convite válido', async ({ page }) => {
@@ -587,7 +840,8 @@ test.describe('convites da equipe', () => {
     await expect(expired).toContainText('Expirado');
     await expect(revoked).toContainText('Revogado');
     await expect(accepted).toHaveCount(2);
-    await expect(accepted.first()).toContainText('Aceito');
+    await expect(accepted.nth(0)).toContainText('Aceito');
+    await expect(accepted.nth(1)).toContainText('Aceito');
     await expect(pending).toContainText('Pendente');
     const initialRowCount = await rows.count();
     expect(initialRowCount).toBeGreaterThan(4);
@@ -643,7 +897,8 @@ test.describe('convites da equipe', () => {
     expect(await response.json()).toHaveLength(2);
     await expect(expired).toHaveCount(0);
     await expect(revoked).toHaveCount(0);
-    await expect(accepted.first()).toContainText('Aceito');
+    await expect(accepted.nth(0)).toContainText('Aceito');
+    await expect(accepted.nth(1)).toContainText('Aceito');
     await expect(pending).toContainText('Pendente');
 
     await page.reload();
@@ -658,9 +913,10 @@ test.describe('convites da equipe', () => {
     await expect(
       refreshedRows.filter({ hasText: 'Profissional convite revogado E2E' }),
     ).toHaveCount(0);
-    await expect(
-      refreshedRows.filter({ hasText: 'Profissional convidado E2E' }).first(),
-    ).toContainText('Aceito');
+    const refreshedAccepted = refreshedRows.filter({ hasText: 'Profissional convidado E2E' });
+    await expect(refreshedAccepted).toHaveCount(2);
+    await expect(refreshedAccepted.nth(0)).toContainText('Aceito');
+    await expect(refreshedAccepted.nth(1)).toContainText('Aceito');
     await expect(
       refreshedRows.filter({ hasText: 'Profissional convite pendente E2E' }),
     ).toContainText('Pendente');
@@ -669,19 +925,53 @@ test.describe('convites da equipe', () => {
 });
 
 test.describe('pedidos de acesso à empresa', () => {
+  test('pedido público é salvo no salão indicado pelo link', async ({ page }) => {
+    const organizationId = getFixtureOrganizationId();
+    test.skip(
+      process.env.E2E_PROVISION !== 'true' || !organizationId || !accounts.manager,
+      'Requires the isolated E2E salon and manager account.',
+    );
+    const applicantName = 'Profissional com link do salão E2E';
+    const applicantEmail = `salon-link-${Date.now()}@example.test`;
+    await page.goto(`/solicitar-acesso?organization=${encodeURIComponent(organizationId!)}`);
+    await page.getByLabel('Nome e sobrenome').fill(applicantName);
+    await page.getByLabel('E-mail para receber o convite').fill(applicantEmail);
+    await page.getByRole('button', { name: 'Enviar pedido ao gestor', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Pedido enviado', exact: true })).toBeVisible();
+
+    const browser = page.context().browser();
+    if (!browser) throw new Error('Could not create an isolated browser context for the manager.');
+    const baseURL = page.url().match(/^https?:\/\/[^/]+/)?.[0];
+    if (!baseURL) throw new Error('Could not determine the application URL for the manager context.');
+    const managerContext = await browser.newContext({ baseURL });
+    try {
+      const managerPage = await managerContext.newPage();
+      await loginAs(managerPage, requireAccount(accounts.manager, 'manager'));
+      await openModule(managerPage, '/profissionais', 'Profissionais');
+      const requestRow = managerPage
+        .getByTestId('organization-join-request-row')
+        .filter({ hasText: applicantEmail });
+      await expect(requestRow).toBeVisible();
+      await expect(requestRow).toContainText(applicantName);
+    } finally {
+      await managerContext.close();
+    }
+  });
+
   test('mostra no login o link para pedir autorização', async ({ page }) => {
     await page.goto('/login');
     await expect(
-      page.getByRole('link', { name: 'Solicite autorização', exact: true }),
-    ).toHaveAttribute('href', '/solicitar-acesso');
+      page.getByRole('link', { name: 'Crie sua conta', exact: true }),
+    ).toHaveAttribute('href', '/cadastro');
   });
 
-  test('permite solicitar acesso sem autenticação', async ({ page }) => {
+  test('solicitação pública exige um link específico do salão', async ({ page }) => {
     await page.goto('/solicitar-acesso');
     await expect(page).toHaveURL(/\/solicitar-acesso$/);
     await expect(
       page.getByRole('heading', { name: 'Solicitar autorização', exact: true }),
     ).toBeVisible();
-    await expect(page.getByLabel('Nome e sobrenome')).toBeVisible();
+    await expect(page.getByText(/link específico do salão/)).toBeVisible();
+    await expect(page.getByLabel('Nome e sobrenome')).toHaveCount(0);
   });
 });
