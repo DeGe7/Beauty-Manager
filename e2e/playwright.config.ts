@@ -52,6 +52,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     ...devices['Desktop Chrome'],
+    timezoneId: 'America/Sao_Paulo',
   },
   webServer: startServer
     ? {
