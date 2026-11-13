@@ -120,9 +120,9 @@ async function createMockSupabase() {
           if (table === 'organization_members') {
             const userFilter = url.searchParams.get('user_id') || '';
             const organizationFilter = url.searchParams.get('organization_id') || '';
-            const userIds = userFilter.match(/^in\((.*)\)$/)?.[1]?.split(',') || [];
+            const userIds = userFilter.match(/^in\.?\((.*)\)$/)?.[1]?.split(',') || [];
             const exactUserId = userFilter.startsWith('eq.') ? userFilter.slice(3) : undefined;
-            const organizationIds = organizationFilter.match(/^in\((.*)\)$/)?.[1]?.split(',') || [];
+            const organizationIds = organizationFilter.match(/^in\.?\((.*)\)$/)?.[1]?.split(',') || [];
             const exactOrganizationId = organizationFilter.startsWith('eq.')
               ? organizationFilter.slice(3)
               : undefined;
