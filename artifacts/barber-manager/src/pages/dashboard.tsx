@@ -373,12 +373,12 @@ export default function Dashboard() {
             {PAYMENT_METHODS.map(method => (
               <div key={method} className={`min-w-0 rounded-xl border p-3 md:p-4 ${PAYMENT_CARD_STYLES[method]}`}>
                 <p className="text-xs font-semibold uppercase text-muted-foreground">{PAY_LABELS[method]}</p>
-                <div className="mt-3 space-y-1.5 text-sm">
-                  <p className="flex items-center justify-between gap-2">
+                <div className="mt-3 min-w-0 space-y-1.5 text-sm">
+                  <p className="flex min-w-0 flex-wrap items-center justify-between gap-x-2">
                     <span className="text-muted-foreground">Entrou</span>
                     <strong className={`shrink-0 ${PAYMENT_VALUE_STYLES[method]}`}>{brl(paymentTotals[method])}</strong>
                   </p>
-                  <p className="flex items-center justify-between gap-2">
+                  <p className="flex min-w-0 flex-wrap items-center justify-between gap-x-2">
                     <span className="text-muted-foreground">Saiu</span>
                     <strong className="shrink-0 text-destructive">{brl(expenseTotals[method])}</strong>
                   </p>
@@ -688,7 +688,7 @@ export default function Dashboard() {
             )}
           </div>
 
-          {!ownProfile && !isReceptionist && <div data-testid="professional-revenue-card" className="bg-brand-surface border border-brand-border rounded-2xl p-6">
+          {!ownProfile && !isReceptionist && <div data-testid="professional-revenue-card" className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6">
             <div className="mb-4">
               <h3 className="text-lg font-bold text-foreground">Faturamento por Profissional</h3>
               <p className="mt-1 text-xs text-muted-foreground">Período: {revenuePeriodLabels[revenuePeriod]}</p>
@@ -732,7 +732,7 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
                  <div
-                   className="mt-4 grid gap-2 border-t border-brand-border pt-4"
+                    className="mt-4 grid min-w-0 gap-2 border-t border-brand-border pt-4"
                    aria-label="Detalhamento do faturamento por profissional"
                    role="list"
                  >
@@ -740,11 +740,11 @@ export default function Dashboard() {
                      <div
                        key={`revenue-detail-${entry.name}`}
                        data-testid="revenue-professional-row"
-                       className="flex items-center justify-between gap-4 text-sm"
+                        className="flex min-w-0 flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4"
                        role="listitem"
                      >
-                       <span className="min-w-0 truncate text-muted-foreground">{entry.fullName}</span>
-                       <span className="shrink-0 font-semibold text-foreground">
+                        <span className="min-w-0 break-words text-muted-foreground [overflow-wrap:anywhere] sm:truncate">{entry.fullName}</span>
+                        <span className="break-words font-semibold text-foreground [overflow-wrap:anywhere] sm:shrink-0">
                          {brl(entry.total)} · {formatPercentage((entry.total / revenueTotal) * 100)}
                        </span>
                      </div>
