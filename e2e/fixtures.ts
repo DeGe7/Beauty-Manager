@@ -1,4 +1,5 @@
 import { expect, test as base, type Page } from '@playwright/test';
+import { saoPauloDateKey } from './date-helpers.ts';
 import {
   beginScenarioSnapshot,
   cleanupScenarioFixtures,
@@ -144,6 +145,16 @@ export async function loginAs(page: Page, account: Credentials, options: { invit
       await signOutButton.click();
       await expect.poll(() => storedAuthEmail(page), { timeout: 20_000 }).toBeNull();
       await page.goto(loginPath);
+    } else if (currentEmail) {
+      await page.evaluate(() => {
+        const storage = globalThis as typeof globalThis & {
+          localStorage: { clear: () => void };
+          sessionStorage: { clear: () => void };
+        };
+        storage.localStorage.clear();
+        storage.sessionStorage.clear();
+      });
+      await page.reload();
     }
   }
   await expect(emailField).toBeVisible();
@@ -187,7 +198,5 @@ export function uniqueName(prefix: string) {
 }
 
 export function today() {
-  const date = new Date();
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return saoPauloDateKey();
 }
