@@ -214,7 +214,7 @@ test('sends to the email stored on the authorized active invitation', async () =
   assert.deepEqual(body, { emailId: 'resend-email-123', status: 'sent' });
   assert.equal(resendCalls.length, 1);
   assert.equal(resendCalls[0].body.to, 'profissional@example.com');
-  assert.equal(resendCalls[0].body.from, 'Barber Manager <nao-responda@auth.msstudios.com.br>');
+  assert.equal(resendCalls[0].body.from, 'Beauty Manager <nao-responda@auth.msstudios.com.br>');
   assert.match(resendCalls[0].body.text, new RegExp(token));
   assert.match(resendCalls[0].body.html, new RegExp(`href="https://app\\.test/convite/${token}"`));
   assert.equal(resendCalls[0].headers.get('Idempotency-Key'), invitationId);

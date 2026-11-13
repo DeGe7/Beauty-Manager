@@ -56,6 +56,7 @@ function baseProfile(user: User): UserSession {
     phone: user.phone || undefined,
     name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || user.phone || 'Usuário',
     role: null,
+    organizations: [],
   };
 }
 
@@ -73,26 +74,33 @@ async function fetchProfile(user: User, signal?: AbortSignal): Promise<UserSessi
     throw new Error(`Não foi possível carregar seu perfil: ${profileError.message}`);
   }
 
-  const { data: membership, error: membershipError } = await supabase
-    .from('organization_members')
-    .select('organization_id, role, professional_id')
-    .eq('user_id', user.id)
-    .eq('is_active', true)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .abortSignal(signal ?? new AbortController().signal)
-    .maybeSingle();
+  const { data: organizationRows, error: membershipError } = await supabase
+    .rpc('list_my_organizations')
+    .abortSignal(signal ?? new AbortController().signal);
 
   if (membershipError && membershipError.code !== 'PGRST205') {
     throw new Error(`Não foi possível carregar seu acesso: ${membershipError.message}`);
   }
 
+  const organizations = ((organizationRows ?? []) as Array<Record<string, unknown>>)
+    .map(row => ({
+      id: String(row.organization_id ?? ''),
+      name: String(row.organization_name ?? ''),
+      role: String(row.role ?? ''),
+      professionalId: row.professional_id ? String(row.professional_id) : undefined,
+    }))
+    .filter(item => item.id && item.role);
+  const activeOrganizationId = profileRow?.default_organization_id
+    ? String(profileRow.default_organization_id)
+    : undefined;
+  const membership = organizations.find(item => item.id === activeOrganizationId) ?? organizations[0];
+
   let rolePermissions: string[] | undefined;
-  if (membership?.organization_id && membership.role) {
+  if (membership?.id && membership.role) {
     const { data: settings } = await supabase
       .from('organization_settings')
       .select('payload')
-      .eq('organization_id', membership.organization_id)
+      .eq('organization_id', membership.id)
       .abortSignal(signal ?? new AbortController().signal)
       .maybeSingle();
     const payload = settings?.payload as { roles?: Array<{ key?: string; permissions?: unknown }> } | undefined;
@@ -120,11 +128,14 @@ async function fetchProfile(user: User, signal?: AbortSignal): Promise<UserSessi
     phone: user.phone || undefined,
     name: String(profileRow?.full_name || user.user_metadata?.full_name || 'Usuário'),
     role,
-    professionalId: membership?.professional_id ? String(membership.professional_id) : undefined,
+    professionalId: membership?.professionalId,
     avatar,
-    organizationId: membership?.organization_id
-      ? String(membership.organization_id)
-      : undefined,
+    organizationId: membership?.id,
+    organizations: organizations.map(item => ({
+      id: item.id,
+      name: item.name || 'Salão sem nome',
+      role: item.role,
+    })),
     permissions: role ? getPermissionsForRole(role, rolePermissions) : undefined,
   };
 }
@@ -149,8 +160,9 @@ export interface AuthState {
   updatePassword: (password: string) => Promise<void>;
   signOut: () => Promise<void>;
   completeOnboarding: (organizationName: string) => Promise<void>;
+  switchOrganization: (organizationId: string) => Promise<void>;
   acceptInvitation: (token: string) => Promise<void>;
-  setAvatar: (file: File) => Promise<void>;
+  setAvatar: (file: File) => Promise<string>;
   setName: (name: string) => Promise<void>;
 }
 
@@ -332,27 +344,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ) => {
     assertNotPreviewing();
     if (!supabase) throw missingConfigurationError();
-    if (!invitationToken?.trim()) {
-      throw new Error('É necessário um convite válido para criar uma conta.');
-    }
-    const { data: invitationInfo, error: invitationError } = await supabase.rpc(
-      'get_public_organization_invitation_info',
-      { p_token: invitationToken.trim() },
-    );
-    if (invitationError) throw new Error(`Não foi possível validar o convite: ${invitationError.message}`);
-    if (!invitationInfo?.valid || invitationInfo.channel !== 'email') {
-      throw new Error('Use um convite válido para cadastro por e-mail.');
-    }
-    const invitedEmail = String(invitationInfo.email ?? '').trim().toLowerCase();
-    if (!invitedEmail || invitedEmail !== email.trim().toLowerCase()) {
-      throw new Error('Use o mesmo e-mail indicado no convite.');
+    if (invitationToken?.trim()) {
+      const { data: invitationInfo, error: invitationError } = await supabase.rpc(
+        'get_public_organization_invitation_info',
+        { p_token: invitationToken.trim() },
+      );
+      if (invitationError) throw new Error(`Não foi possível validar o convite: ${invitationError.message}`);
+      if (!invitationInfo?.valid || invitationInfo.channel !== 'email') {
+        throw new Error('Use um convite válido para cadastro por e-mail.');
+      }
+      const invitedEmail = String(invitationInfo.email ?? '').trim().toLowerCase();
+      if (!invitedEmail || invitedEmail !== email.trim().toLowerCase()) {
+        throw new Error('Use o mesmo e-mail indicado no convite.');
+      }
     }
     const basePath = import.meta.env.BASE_URL.endsWith('/')
       ? import.meta.env.BASE_URL
       : `${import.meta.env.BASE_URL}/`;
     const confirmationUrl = new URL(`${basePath}conta-verificada`, window.location.origin);
     confirmationUrl.searchParams.set('confirmacao', 'email');
-    confirmationUrl.searchParams.set('convite', invitationToken.trim());
+    if (invitationToken?.trim()) confirmationUrl.searchParams.set('convite', invitationToken.trim());
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -363,8 +374,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
     });
     if (error) throw translateAuthError(error);
+    if (data.session) await hydrate(data.session, true);
     return { needsEmailConfirmation: !data.session };
-  }, []);
+  }, [hydrate]);
 
   const requestPasswordReset = useCallback(async (
     email: string,
@@ -415,6 +427,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (currentSession.session) await hydrate(currentSession.session, true);
   }, [hydrate]);
 
+  const switchOrganization = useCallback(async (organizationId: string) => {
+    assertNotPreviewing();
+    if (!supabase || !session) throw missingConfigurationError();
+    const { error } = await supabase.rpc('switch_current_organization', {
+      p_organization_id: organizationId,
+    });
+    if (error) throw new Error(`Não foi possível trocar de salão: ${error.message}`);
+    await hydrate(session, true);
+  }, [hydrate, session]);
+
   const acceptInvitation = useCallback(async (token: string) => {
     assertNotPreviewing();
     if (!supabase) throw missingConfigurationError();
@@ -441,6 +463,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setAvatar = useCallback(async (file: File) => {
     assertNotPreviewing();
     if (!supabase || !user) throw missingConfigurationError();
+    const previousAvatarPath = profileRef.current?.id === user.id
+      ? getStorageObjectPath(profileRef.current.avatar, 'avatars')
+      : undefined;
     const extension = file.name.split('.').pop()?.toLowerCase() || 'jpg';
     const path = `${user.id}/${crypto.randomUUID()}.${extension}`;
     const { error: uploadError } = await supabase.storage.from('avatars').upload(path, file, {
@@ -455,14 +480,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(`Não foi possível preparar a foto: ${avatarUrlError?.message || 'URL assinada indisponível'}`);
     }
 
-    const { error: profileError } = await supabase.from('profiles').update({ avatar_url: path }).eq('id', user.id);
+    const { data: updatedProfile, error: profileError } = await supabase
+      .from('profiles')
+      .update({ avatar_url: path })
+      .eq('id', user.id)
+      .select('avatar_url')
+      .maybeSingle();
     if (profileError) throw new Error(`Não foi possível salvar a foto: ${profileError.message}`);
-    setProfile((current) => current ? { ...current, avatar: avatarData.signedUrl } : current);
+    if (updatedProfile?.avatar_url !== path) {
+      throw new Error('A foto foi enviada, mas o perfil não confirmou a atualização. Tente novamente.');
+    }
+
+    const nextProfile = profileRef.current?.id === user.id
+      ? { ...profileRef.current, avatar: avatarData.signedUrl }
+      : null;
+    if (nextProfile) profileRef.current = nextProfile;
+    setProfile((current) => current?.id === user.id
+      ? { ...current, avatar: avatarData.signedUrl }
+      : current);
+
+    if (
+      previousAvatarPath
+      && previousAvatarPath !== path
+      && previousAvatarPath.startsWith(`${user.id}/`)
+    ) {
+      try {
+        const { error: removalError } = await supabase.storage.from('avatars').remove([previousAvatarPath]);
+        if (removalError) throw removalError;
+      } catch (removalError) {
+        console.error(
+          'Não foi possível remover a foto anterior:',
+          removalError instanceof Error ? removalError.message : String(removalError),
+        );
+      }
+    }
+
+    return avatarData.signedUrl;
   }, [user]);
 
   return createElement(
     AuthContext.Provider,
-      { value: { user, session, profile, viewAsProfile, loading, accessError, setViewAsProfile, signIn, signUp, requestPasswordReset, updatePassword, signOut, completeOnboarding, acceptInvitation, setAvatar, setName } },
+      { value: { user, session, profile, viewAsProfile, loading, accessError, setViewAsProfile, signIn, signUp, requestPasswordReset, updatePassword, signOut, completeOnboarding, switchOrganization, acceptInvitation, setAvatar, setName } },
     children,
   );
 }

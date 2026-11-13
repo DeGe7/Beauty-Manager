@@ -1,4 +1,4 @@
- -- Barber Manager — Supabase source of truth
+ -- Beauty Manager — Supabase source of truth
  -- Execute this script once in the Supabase SQL Editor.
  -- It replaces the temporary Replit/Drizzle model with a tenant-safe model.
 
@@ -346,7 +346,10 @@
  security definer
  set search_path = public
  as $$
-   select public.current_user_role() = any(array['gestor', 'dev-admin']);
+   select coalesce(
+     public.current_user_role() = any(array['gestor', 'dev-admin']),
+     false
+   );
  $$;
 
   create or replace function public.list_professional_account_emails()
@@ -406,6 +409,54 @@
    updated_at timestamptz not null default now()
  );
 
+ create or replace function public.default_service_catalog()
+ returns jsonb
+ language sql
+ immutable
+ set search_path = public, pg_temp
+ as $$
+   select jsonb_build_array(
+     jsonb_build_object('id', 'service-barbearia', 'name', 'Barbearia', 'category', 'Barbearia', 'price', 0, 'duration', 30, 'commissionKey', 'barbearia', 'isActive', true, 'sortOrder', 1),
+     jsonb_build_object('id', 'service-manutencao', 'name', 'Manutenção', 'category', 'Barbearia', 'price', 0, 'duration', 30, 'commissionKey', 'manutencao', 'isActive', true, 'sortOrder', 2),
+     jsonb_build_object('id', 'service-manicure', 'name', 'Manicure', 'category', 'Salão de Beleza', 'price', 0, 'duration', 60, 'commissionKey', 'manicure', 'isActive', true, 'sortOrder', 3),
+     jsonb_build_object('id', 'service-protese', 'name', 'Prótese Capilar', 'category', 'Prótese', 'price', 0, 'duration', 120, 'commissionKey', 'protese', 'isActive', true, 'sortOrder', 4),
+     jsonb_build_object('id', 'service-mentoria', 'name', 'Mentoria', 'category', 'Prótese', 'price', 0, 'duration', 120, 'commissionKey', 'mentoria', 'isActive', true, 'sortOrder', 5)
+   );
+ $$;
+
+ create or replace function public.ensure_default_service_catalog()
+ returns trigger
+ language plpgsql
+ security definer
+ set search_path = public, pg_temp
+ as $$
+ begin
+   if (
+     case
+       when jsonb_typeof(coalesce(new.payload, '{}'::jsonb)->'services') = 'array'
+         then jsonb_array_length(new.payload->'services') = 0
+       else true
+     end
+   ) then
+     new.payload := jsonb_set(
+       coalesce(new.payload, '{}'::jsonb),
+       '{services}',
+       public.default_service_catalog(),
+       true
+     );
+   end if;
+   return new;
+ end;
+ $$;
+
+ revoke all on function public.default_service_catalog() from public, anon, authenticated;
+ revoke all on function public.ensure_default_service_catalog() from public, anon, authenticated;
+
+ drop trigger if exists organization_settings_default_services on public.organization_settings;
+ create trigger organization_settings_default_services
+ before insert or update of payload on public.organization_settings
+ for each row execute function public.ensure_default_service_catalog();
+
  create table if not exists public.appointments (
    id text primary key default gen_random_uuid()::text,
    date text not null,
@@ -417,6 +468,7 @@
    seller_professional_id text references public.professionals(id) on delete set null,
    seller_is_company boolean not null default false,
    service text not null,
+    service_description text,
      service_id text,
      plan_subscriber_id text,
      plan_usage_value double precision not null default 0 check (plan_usage_value >= 0),
@@ -445,7 +497,8 @@
  -- Existing appointments remain unchanged and default to a non-company, unattributed sale.
  alter table public.appointments
    add column if not exists seller_professional_id text,
-   add column if not exists seller_is_company boolean not null default false;
+    add column if not exists seller_is_company boolean not null default false,
+    add column if not exists service_description text;
 
  do $$
  begin
@@ -553,6 +606,7 @@
    stock integer not null default 0 check (stock >= 0),
    min_stock integer not null default 0 check (min_stock >= 0),
    is_active boolean not null default true,
+   is_prosthesis_capillary boolean not null default false,
    organization_id uuid not null references public.organizations(id) on delete cascade,
    created_at timestamptz not null default now(),
    updated_at timestamptz not null default now()
@@ -591,9 +645,86 @@
    date text not null,
    description text not null,
    amount double precision not null default 0 check (amount >= 0),
+    payment_method text check (payment_method in ('debito', 'credito', 'pix', 'dinheiro')),
    organization_id uuid not null references public.organizations(id) on delete cascade,
    created_at timestamptz not null default now()
  );
+
+  alter table public.incomes
+    add column if not exists payment_method text;
+
+  do $$
+  begin
+    if not exists (
+      select 1 from pg_constraint
+      where conname = 'incomes_payment_method_check'
+        and conrelid = 'public.incomes'::regclass
+    ) then
+      alter table public.incomes
+        add constraint incomes_payment_method_check
+        check (payment_method in ('debito', 'credito', 'pix', 'dinheiro'));
+    end if;
+  end $$;
+
+  create table if not exists public.product_sales (
+    id text primary key default gen_random_uuid()::text,
+    date text not null,
+    client_id text references public.clients(id) on delete set null,
+    appointment_id text references public.appointments(id) on delete set null,
+    payment_method text not null
+      check (payment_method in ('debito', 'credito', 'pix', 'dinheiro')),
+    items jsonb not null
+      check (jsonb_typeof(items) = 'array' and jsonb_array_length(items) > 0),
+    total double precision not null check (total >= 0),
+    organization_id uuid not null references public.organizations(id) on delete cascade,
+    created_by uuid references public.profiles(id) on delete set null,
+    created_at timestamptz not null default now(),
+    reversal_date text check (reversal_date is null or reversal_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'),
+    reversal_reason text check (reversal_reason is null or length(btrim(reversal_reason)) between 3 and 500),
+    reversed_at timestamptz,
+    reversed_by uuid references public.profiles(id) on delete set null
+  );
+
+  alter table public.product_sales
+    add column if not exists reversal_date text,
+    add column if not exists reversal_reason text,
+    add column if not exists reversed_at timestamptz,
+    add column if not exists reversed_by uuid references public.profiles(id) on delete set null;
+
+  do $$
+  begin
+    if not exists (
+      select 1 from pg_constraint
+       where conname = 'product_sales_reversal_date_check'
+         and conrelid = 'public.product_sales'::regclass
+    ) then
+      alter table public.product_sales
+        add constraint product_sales_reversal_date_check
+        check (reversal_date is null or reversal_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    end if;
+    if not exists (
+      select 1 from pg_constraint
+       where conname = 'product_sales_reversal_reason_check'
+         and conrelid = 'public.product_sales'::regclass
+    ) then
+      alter table public.product_sales
+        add constraint product_sales_reversal_reason_check
+        check (reversal_reason is null or length(btrim(reversal_reason)) between 3 and 500);
+    end if;
+    if not exists (
+      select 1 from pg_constraint
+       where conname = 'product_sales_reversal_state_check'
+         and conrelid = 'public.product_sales'::regclass
+    ) then
+      alter table public.product_sales
+        add constraint product_sales_reversal_state_check
+        check (
+          (reversal_date is null and reversal_reason is null and reversed_at is null)
+          or (reversal_date is not null and reversal_reason is not null and reversed_at is not null)
+        );
+    end if;
+  end
+  $$;
 
   create table if not exists public.finance_entry_changes (
     id uuid primary key default gen_random_uuid(),
@@ -649,6 +780,8 @@
    services jsonb not null default '[]'::jsonb,
    duration text not null default 'Mensal'
      check (duration in ('Mensal', 'Trimestral', 'Semestral', 'Anual')),
+    salon_share_percent numeric(5, 2)
+      check (salon_share_percent is null or salon_share_percent between 0 and 100),
    organization_id uuid not null references public.organizations(id) on delete cascade,
    created_at timestamptz not null default now(),
    updated_at timestamptz not null default now()
@@ -665,6 +798,11 @@
    status text not null default 'ativo'
      check (status in ('ativo', 'vencido', 'pendente')),
     usage_started_at timestamptz not null default now(),
+    salon_share_percent_snapshot numeric(5, 2)
+      check (
+        salon_share_percent_snapshot is null
+        or salon_share_percent_snapshot between 0 and 100
+      ),
    organization_id uuid not null references public.organizations(id) on delete cascade,
    created_at timestamptz not null default now(),
    updated_at timestamptz not null default now()
@@ -679,12 +817,148 @@
    payment_method text check (payment_method in ('debito', 'credito', 'pix', 'dinheiro')),
    status text not null default 'pendente'
      check (status in ('pago', 'pendente', 'vencido')),
+    salon_share_percent_snapshot numeric(5, 2)
+      check (
+        salon_share_percent_snapshot is null
+        or salon_share_percent_snapshot between 0 and 100
+      ),
    note text,
    organization_id uuid not null references public.organizations(id) on delete cascade,
    created_at timestamptz not null default now(),
    updated_at timestamptz not null default now(),
    unique (subscriber_id, due_date)
  );
+
+alter table public.subscription_plans
+  add column if not exists salon_share_percent numeric(5, 2);
+alter table public.subscription_plans
+  drop constraint if exists subscription_plans_salon_share_percent_range;
+alter table public.subscription_plans
+  add constraint subscription_plans_salon_share_percent_range
+  check (salon_share_percent is null or salon_share_percent between 0 and 100);
+
+alter table public.subscribers
+  add column if not exists salon_share_percent_snapshot numeric(5, 2);
+alter table public.subscribers
+  drop constraint if exists subscribers_salon_share_snapshot_range;
+alter table public.subscribers
+  add constraint subscribers_salon_share_snapshot_range
+  check (
+    salon_share_percent_snapshot is null
+    or salon_share_percent_snapshot between 0 and 100
+  );
+
+alter table public.subscription_payments
+  add column if not exists salon_share_percent_snapshot numeric(5, 2);
+alter table public.subscription_payments
+  drop constraint if exists subscription_payments_salon_share_snapshot_range;
+alter table public.subscription_payments
+  add constraint subscription_payments_salon_share_snapshot_range
+  check (
+    salon_share_percent_snapshot is null
+    or salon_share_percent_snapshot between 0 and 100
+  );
+
+  comment on column public.subscription_plans.salon_share_percent is
+    'Configured salon share for future paid plan receipts and uses; null preserves legacy commission behavior.';
+  comment on column public.subscribers.salon_share_percent_snapshot is
+    'Salon share captured for the current manual-use cycle; null preserves legacy commission behavior.';
+  comment on column public.subscription_payments.salon_share_percent_snapshot is
+    'Salon share captured when this payment first becomes paid; null means no historical split is known.';
+
+  create or replace function public.snapshot_subscription_plan_share_on_paid_payment()
+  returns trigger
+  language plpgsql
+  security definer
+  set search_path = public
+  as $$
+  begin
+    if new.status <> 'pago' or new.salon_share_percent_snapshot is not null then
+      return new;
+    end if;
+
+    if tg_op = 'UPDATE' and old.status = 'pago' then
+      return new;
+    end if;
+
+    select plan.salon_share_percent
+      into new.salon_share_percent_snapshot
+      from public.subscribers subscriber
+      join public.subscription_plans plan
+        on plan.id = subscriber.plan_id
+       and plan.organization_id = subscriber.organization_id
+     where subscriber.id = new.subscriber_id
+       and subscriber.organization_id = new.organization_id;
+
+    update public.subscribers subscriber
+       set salon_share_percent_snapshot = new.salon_share_percent_snapshot
+     where subscriber.id = new.subscriber_id
+       and subscriber.organization_id = new.organization_id
+       and not exists (
+         select 1
+           from public.appointments appointment
+          where appointment.plan_subscriber_id = subscriber.id
+            and appointment.organization_id = subscriber.organization_id
+            and appointment.status in ('confirmed', 'completed')
+            and appointment.attendance_recorded_at >= subscriber.usage_started_at
+       );
+
+    return new;
+  end;
+  $$;
+
+  revoke all on function public.snapshot_subscription_plan_share_on_paid_payment()
+    from public, anon, authenticated;
+  drop trigger if exists subscription_payments_plan_share_snapshot
+    on public.subscription_payments;
+  create trigger subscription_payments_plan_share_snapshot
+  before insert or update on public.subscription_payments
+  for each row execute function public.snapshot_subscription_plan_share_on_paid_payment();
+
+  create or replace function public.snapshot_subscriber_plan_share_for_usage_cycle()
+  returns trigger
+  language plpgsql
+  security definer
+  set search_path = public
+  as $$
+  declare
+    v_paid_share_percent numeric(5, 2);
+  begin
+    if new.plan_id is distinct from old.plan_id then
+      select plan.salon_share_percent
+        into new.salon_share_percent_snapshot
+        from public.subscription_plans plan
+       where plan.id = new.plan_id
+         and plan.organization_id = new.organization_id;
+    elsif new.usage_started_at is distinct from old.usage_started_at then
+      select payment.salon_share_percent_snapshot
+        into v_paid_share_percent
+        from public.subscription_payments payment
+       where payment.subscriber_id = new.id
+         and payment.organization_id = new.organization_id
+         and payment.status = 'pago'
+       order by coalesce(payment.paid_at, payment.due_date) desc,
+                payment.updated_at desc,
+                payment.id desc
+       limit 1;
+      if found then
+        new.salon_share_percent_snapshot := v_paid_share_percent;
+      else
+        new.salon_share_percent_snapshot := old.salon_share_percent_snapshot;
+      end if;
+    end if;
+
+    return new;
+  end;
+  $$;
+
+  revoke all on function public.snapshot_subscriber_plan_share_for_usage_cycle()
+    from public, anon, authenticated;
+  drop trigger if exists subscribers_plan_share_cycle_snapshot
+    on public.subscribers;
+  create trigger subscribers_plan_share_cycle_snapshot
+  before update of plan_id, usage_started_at on public.subscribers
+  for each row execute function public.snapshot_subscriber_plan_share_for_usage_cycle();
 
  insert into public.subscription_payments (subscriber_id, due_date, amount, status, organization_id)
  select s.id, s.next_payment, coalesce(p.price, 0),
@@ -745,10 +1019,13 @@
    if public.is_manager() then
      return true;
    end if;
-     if role_key = 'recepcao'
-        and permission_key in ('financeiro', 'profissionais', 'configuracoes', 'comunicacao') then
+      if role_key = 'recepcao'
+         and permission_key in ('financeiro', 'profissionais', 'configuracoes', 'comunicacao') then
       return false;
     end if;
+     if role_key = 'recepcao' and permission_key = 'planos' then
+       return true;
+     end if;
 
    select role_item->'permissions'
      into configured_permissions
@@ -774,6 +1051,7 @@
  create index if not exists products_organization_idx on public.products (organization_id, is_active);
  create index if not exists expenses_organization_date_idx on public.expenses (organization_id, date);
  create index if not exists incomes_organization_date_idx on public.incomes (organization_id, date);
+ create index if not exists product_sales_organization_date_idx on public.product_sales (organization_id, date desc);
   create index if not exists finance_entry_changes_organization_changed_idx
     on public.finance_entry_changes (organization_id, changed_at desc);
   create index if not exists finance_entry_changes_entry_idx
@@ -1068,7 +1346,10 @@
      public.is_manager()
      or (
        public.has_permission('planos')
-       and current_sub.professional_id = public.current_professional_id()
+        and (
+          current_sub.professional_id = public.current_professional_id()
+          or public.current_user_role() = 'recepcao'
+        )
      )
    ) then
      raise exception 'user does not have permission to update subscription payments';
@@ -2439,6 +2720,7 @@
  alter table public.products enable row level security;
  alter table public.expenses enable row level security;
  alter table public.incomes enable row level security;
+ alter table public.product_sales enable row level security;
   alter table public.finance_entry_changes enable row level security;
  alter table public.prothesis_sales enable row level security;
  alter table public.mentoria_sessions enable row level security;
@@ -2455,7 +2737,7 @@
  begin
    foreach table_name in array array[
      'professionals', 'organization_settings', 'appointments', 'blocks',
-     'clients', 'products', 'expenses', 'incomes', 'prothesis_sales',
+     'clients', 'products', 'expenses', 'incomes', 'product_sales', 'prothesis_sales',
      'mentoria_sessions', 'subscription_plans', 'subscribers',
      'subscription_payments'
    ] loop
@@ -2532,7 +2814,7 @@
    policy_condition text;
  begin
    foreach table_name in array array[
-     'clients', 'products', 'expenses', 'incomes'
+     'clients', 'products', 'expenses', 'incomes', 'product_sales'
    ] loop
      permission_key := case
        when table_name = 'clients' then 'clientes'
@@ -2561,6 +2843,9 @@
  end;
  $$;
 
+ revoke all on public.product_sales from public, anon, authenticated;
+ grant select on public.product_sales to authenticated;
+
  do $$
  declare
    table_name text;
@@ -2582,7 +2867,10 @@
    create policy subscribers_select_member on public.subscribers
    for select to authenticated using (
      organization_id = public.current_organization_id()
-     and public.is_current_organization_professional(professional_id)
+     and (
+       public.is_current_organization_professional(professional_id)
+       or (public.current_user_role() = 'recepcao' and professional_id is null)
+     )
      and public.is_current_organization_plan(plan_id)
      and (public.is_manager() or (public.has_permission('planos') and (professional_id = public.current_professional_id() or public.current_user_role() = 'recepcao')))
    );
@@ -2590,12 +2878,18 @@
    create policy subscribers_write on public.subscribers
    for all to authenticated using (
      organization_id = public.current_organization_id()
-     and public.is_current_organization_professional(professional_id)
+     and (
+       public.is_current_organization_professional(professional_id)
+       or (public.current_user_role() = 'recepcao' and professional_id is null)
+     )
      and public.is_current_organization_plan(plan_id)
      and (public.is_manager() or (public.has_permission('planos') and (professional_id = public.current_professional_id() or public.current_user_role() = 'recepcao')))
    ) with check (
      organization_id = public.current_organization_id()
-     and public.is_current_organization_professional(professional_id)
+     and (
+       public.is_current_organization_professional(professional_id)
+       or (public.current_user_role() = 'recepcao' and professional_id is null)
+     )
      and public.is_current_organization_plan(plan_id)
      and (public.is_manager() or (public.has_permission('planos') and (professional_id = public.current_professional_id() or public.current_user_role() = 'recepcao')))
    );
@@ -2609,7 +2903,10 @@
         join public.subscription_plans p on p.id = s.plan_id
        where s.id = subscription_payments.subscriber_id
          and s.organization_id = subscription_payments.organization_id
-         and public.is_current_organization_professional(s.professional_id)
+         and (
+           public.is_current_organization_professional(s.professional_id)
+           or (public.current_user_role() = 'recepcao' and s.professional_id is null)
+         )
          and public.is_current_organization_plan(p.id)
          and (public.is_manager() or (public.has_permission('planos') and (s.professional_id = public.current_professional_id() or public.current_user_role() = 'recepcao')))
     )
@@ -2698,7 +2995,10 @@
         join public.subscription_plans p on p.id = s.plan_id
        where s.id = subscription_payments.subscriber_id
          and s.organization_id = subscription_payments.organization_id
-         and public.is_current_organization_professional(s.professional_id)
+         and (
+           public.is_current_organization_professional(s.professional_id)
+           or (public.current_user_role() = 'recepcao' and s.professional_id is null)
+         )
          and public.is_current_organization_plan(p.id)
          and (public.is_manager() or (public.has_permission('planos') and (s.professional_id = public.current_professional_id() or public.current_user_role() = 'recepcao')))
     )
@@ -2710,7 +3010,10 @@
         join public.subscription_plans p on p.id = s.plan_id
        where s.id = subscription_payments.subscriber_id
          and s.organization_id = subscription_payments.organization_id
-         and public.is_current_organization_professional(s.professional_id)
+         and (
+           public.is_current_organization_professional(s.professional_id)
+           or (public.current_user_role() = 'recepcao' and s.professional_id is null)
+         )
          and public.is_current_organization_plan(p.id)
          and (public.is_manager() or (public.has_permission('planos') and (s.professional_id = public.current_professional_id() or public.current_user_role() = 'recepcao')))
     )
@@ -2841,6 +3144,15 @@
    end loop;
  end;
  $$;
+
+  drop policy if exists expenses_insert_reception on public.expenses;
+  create policy expenses_insert_reception on public.expenses
+  for insert to authenticated
+  with check (
+    organization_id = public.current_organization_id()
+    and public.current_user_role() = 'recepcao'
+    and public.has_permission('controle')
+  );
 
  -- ----------------------------------------------------------------------------
  -- Storage
@@ -3382,7 +3694,9 @@ begin
     end if;
 
     actor_id_value := coalesce(auth.uid(), new.reviewed_by);
-    event_time_value := coalesce(new.reviewed_at, clock_timestamp());
+    -- now() is fixed for the transaction, so repeated review transitions in
+    -- one transaction would otherwise collide on the unique event key.
+    event_time_value := clock_timestamp();
     event_key_value := format(
       'request:%s:%s:%s',
       new.id,
@@ -4041,6 +4355,11 @@ declare
   v_service_limit integer;
   v_total_uses integer;
   v_used integer;
+  v_total_used integer;
+  v_usage_ordinal integer;
+  v_pool_cents numeric;
+  v_base_cents numeric;
+  v_remainder_cents numeric;
   v_today date;
   v_subscriber_phone text;
   v_client_phone text;
@@ -4203,7 +4522,35 @@ begin
     raise exception 'plan_usage_exhausted' using errcode = 'P0001';
   end if;
 
-  new.plan_usage_value := v_plan.price / v_total_uses;
+  if v_subscriber.salon_share_percent_snapshot is null then
+    new.plan_usage_value := v_plan.price / v_total_uses;
+    return new;
+  end if;
+
+  select count(*)::integer
+    into v_total_used
+    from public.appointments appointment
+   where appointment.plan_subscriber_id = v_subscriber.id
+     and appointment.organization_id = new.organization_id
+     and appointment.status in ('confirmed', 'completed')
+     and appointment.attendance_recorded_at >= v_subscriber.usage_started_at
+     and (tg_op <> 'UPDATE' or appointment.id <> new.id);
+
+  if v_total_used >= v_total_uses then
+    raise exception 'plan_usage_exhausted' using errcode = 'P0001';
+  end if;
+
+  v_usage_ordinal := v_total_used + 1;
+  v_pool_cents := round(
+    v_plan.price::numeric * 100
+    - round(v_plan.price::numeric * 100 * v_subscriber.salon_share_percent_snapshot / 100)
+  );
+  v_base_cents := trunc(v_pool_cents / v_total_uses);
+  v_remainder_cents := mod(v_pool_cents, v_total_uses);
+  new.plan_usage_value := ((
+    v_base_cents + case when v_usage_ordinal <= v_remainder_cents then 1 else 0 end
+  ) / 100::numeric)::double precision;
+  new.service_commission_rate_snapshot := 1;
   return new;
 end;
 $$;
@@ -4696,14 +5043,27 @@ declare
   v_manual_total numeric := 0;
   v_commission_base numeric;
   v_expected_total numeric;
+  v_plan_salon_share_percent numeric;
 begin
+  if new.plan_subscriber_id is not null then
+    select subscriber.salon_share_percent_snapshot
+      into v_plan_salon_share_percent
+      from public.subscribers subscriber
+      join public.subscription_plans plan
+        on plan.id = subscriber.plan_id
+       and plan.organization_id = subscriber.organization_id
+     where subscriber.id = new.plan_subscriber_id
+       and subscriber.organization_id = new.organization_id;
+  end if;
+
   if tg_op = 'INSERT' then
     if new.attendance_recorded_at is null and new.status = 'completed' then
       new.attendance_recorded_at := now();
     end if;
     new.service_commission_rate_snapshot := case
-      when new.attendance_recorded_at is not null then 0.5
-      else null
+      when new.attendance_recorded_at is null then null
+      when v_plan_salon_share_percent is not null then 1
+      else 0.5
     end;
   else
     new.service_commission_rate_snapshot := old.service_commission_rate_snapshot;
@@ -4716,7 +5076,10 @@ begin
     if old.service_commission_rate_snapshot is null
        and old.attendance_recorded_at is null
        and new.attendance_recorded_at is not null then
-      new.service_commission_rate_snapshot := 0.5;
+      new.service_commission_rate_snapshot := case
+        when v_plan_salon_share_percent is not null then 1
+        else 0.5
+      end;
     end if;
   end if;
 
@@ -4806,6 +5169,77 @@ before insert or update of
   service_commission_rate_snapshot
 on public.appointments
 for each row execute function public.validate_appointment_professional_commissions();
+
+create or replace function public.validate_configured_plan_manual_commission_pool()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_plan_salon_share_percent numeric;
+  v_assignment_count integer;
+  v_manual_total numeric;
+  v_expected_total numeric;
+begin
+  if tg_op = 'UPDATE' and old.attendance_recorded_at is not null then
+    return new;
+  end if;
+
+  if new.plan_subscriber_id is null
+     or new.status not in ('confirmed', 'completed')
+     or new.attendance_recorded_at is null then
+    return new;
+  end if;
+
+  select subscriber.salon_share_percent_snapshot
+    into v_plan_salon_share_percent
+    from public.subscribers subscriber
+    join public.subscription_plans plan
+      on plan.id = subscriber.plan_id
+     and plan.organization_id = subscriber.organization_id
+   where subscriber.id = new.plan_subscriber_id
+     and subscriber.organization_id = new.organization_id;
+
+  if v_plan_salon_share_percent is null then
+    return new;
+  end if;
+
+  new.service_commission_rate_snapshot := 1;
+  v_assignment_count := jsonb_array_length(coalesce(new.professional_commissions, '[]'::jsonb));
+  if v_assignment_count <= 1 then
+    return new;
+  end if;
+
+  select coalesce(sum((assignment.value->>'amount')::numeric), 0)
+    into v_manual_total
+    from jsonb_array_elements(new.professional_commissions) as assignment(value);
+  v_expected_total := round(coalesce(new.plan_usage_value, 0)::numeric, 2);
+  if round(v_manual_total, 2) <> v_expected_total then
+    raise exception 'plan_manual_commissions_must_equal_professional_pool'
+      using errcode = 'P0001';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.validate_configured_plan_manual_commission_pool()
+  from public, anon, authenticated;
+drop trigger if exists zzz_appointments_configured_plan_commission_validation
+  on public.appointments;
+create trigger zzz_appointments_configured_plan_commission_validation
+before insert or update of
+  professional_commissions,
+  professional_id,
+  organization_id,
+  plan_subscriber_id,
+  plan_usage_value,
+  attendance_recorded_at,
+  status,
+  service_commission_rate_snapshot
+on public.appointments
+for each row execute function public.validate_configured_plan_manual_commission_pool();
 
 do $$
 begin
@@ -4932,6 +5366,1035 @@ grant execute on function public.get_my_plan_usage_earnings(date, date, text)
 
 insert into public.schema_metadata (key, value)
 values ('app_schema_version', '2026-10-24.1')
+on conflict (key) do update
+  set value = excluded.value, updated_at = now();
+
+notify pgrst, 'reload schema';
+
+
+-- ----------------------------------------------------------------------------
+-- Multi-salon SaaS: one account may belong to multiple isolated organizations.
+-- Keep this section aligned with migrations/2026-11-13-multi-salon-saas.sql.
+-- ----------------------------------------------------------------------------
+begin;
+
+create or replace function public.current_organization_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    (
+      select p.default_organization_id
+        from public.profiles p
+       where p.id = auth.uid()
+         and exists (
+           select 1
+             from public.organization_members m
+            where m.organization_id = p.default_organization_id
+              and m.user_id = auth.uid()
+              and m.is_active
+         )
+    ),
+    (
+      select m.organization_id
+        from public.organization_members m
+       where m.user_id = auth.uid()
+         and m.is_active
+       order by m.created_at, m.organization_id
+       limit 1
+    )
+  );
+$$;
+
+drop policy if exists organizations_select_member on public.organizations;
+create policy organizations_select_member on public.organizations
+for select to authenticated using (
+  exists (
+    select 1
+      from public.organization_members m
+     where m.organization_id = organizations.id
+       and m.user_id = auth.uid()
+       and m.is_active
+  )
+);
+
+create or replace function public.list_my_organizations()
+returns table (
+  organization_id uuid,
+  organization_name text,
+  role text,
+  professional_id text
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.organization_id, o.name, m.role, m.professional_id
+    from public.organization_members m
+    join public.organizations o on o.id = m.organization_id
+   where m.user_id = auth.uid()
+     and m.is_active
+   order by m.created_at, m.organization_id;
+$$;
+revoke all on function public.list_my_organizations() from public, anon;
+grant execute on function public.list_my_organizations() to authenticated;
+
+create or replace function public.switch_current_organization(p_organization_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if p_organization_id is null or not exists (
+    select 1
+      from public.organization_members m
+     where m.organization_id = p_organization_id
+       and m.user_id = auth.uid()
+       and m.is_active
+  ) then
+    raise exception 'active organization membership required';
+  end if;
+  perform set_config('barber_manager.allow_context_update', 'on', true);
+  update public.profiles
+     set default_organization_id = p_organization_id,
+         updated_at = now()
+   where id = auth.uid();
+  if not found then raise exception 'profile not found'; end if;
+  return p_organization_id;
+end;
+$$;
+revoke all on function public.switch_current_organization(uuid) from public, anon;
+grant execute on function public.switch_current_organization(uuid) to authenticated;
+
+create or replace function public.bootstrap_organization(
+  p_name text,
+  p_cnpj text default '',
+  p_address text default ''
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_organization_id uuid;
+  creation_enabled boolean;
+  has_active_membership boolean;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  select coalesce((
+    select enabled
+      from public.deployment_settings
+     where setting_key = 'organization_creation_enabled'
+  ), false) into creation_enabled;
+  if not creation_enabled then
+    raise exception 'organization creation is disabled for this deployment';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('organization-create:' || auth.uid()::text, 0));
+  select exists (
+    select 1 from public.organization_members
+     where user_id = auth.uid() and is_active
+  ) into has_active_membership;
+  if has_active_membership and public.current_user_role() not in ('gestor', 'dev-admin') then
+    raise exception 'only an organization manager can create another organization';
+  end if;
+  if not has_active_membership and exists (
+    select 1
+      from auth.users u
+      join public.organization_invitations i
+        on (
+          (i.email is not null and lower(i.email) = lower(coalesce(u.email, '')))
+          or (i.phone is not null and i.phone = u.phone)
+        )
+     where u.id = auth.uid()
+       and i.accepted_at is null
+       and i.revoked_at is null
+       and i.expires_at > now()
+  ) then
+    raise exception 'accept your pending invitation before creating an organization';
+  end if;
+  if nullif(btrim(p_name), '') is null or length(btrim(p_name)) > 120 then
+    raise exception 'organization name must be between 1 and 120 characters';
+  end if;
+  insert into public.organizations (name, cnpj, address)
+  values (btrim(p_name), coalesce(p_cnpj, ''), coalesce(p_address, ''))
+  returning id into new_organization_id;
+  insert into public.organization_members (organization_id, user_id, role)
+  values (new_organization_id, auth.uid(), 'gestor');
+  perform set_config('barber_manager.allow_context_update', 'on', true);
+  update public.profiles
+     set default_organization_id = new_organization_id, updated_at = now()
+   where id = auth.uid();
+  insert into public.organization_settings (organization_id, payload)
+  values (new_organization_id, '{}'::jsonb);
+  return new_organization_id;
+end;
+$$;
+revoke all on function public.bootstrap_organization(text, text, text) from public, anon;
+grant execute on function public.bootstrap_organization(text, text, text) to authenticated;
+
+create or replace function public.get_onboarding_options()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  has_active_membership boolean;
+  creation_enabled boolean;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  select exists (
+    select 1 from public.organization_members
+     where user_id = auth.uid() and is_active
+  ) into has_active_membership;
+  select coalesce((
+    select enabled
+      from public.deployment_settings
+     where setting_key = 'organization_creation_enabled'
+  ), false) into creation_enabled;
+  return jsonb_build_object(
+    'can_create_organization',
+      creation_enabled and (
+        not has_active_membership
+        or public.current_user_role() in ('gestor', 'dev-admin')
+      ),
+    'can_request_access', false
+  );
+end;
+$$;
+revoke all on function public.get_onboarding_options() from public, anon;
+grant execute on function public.get_onboarding_options() to authenticated;
+
+create or replace function public.get_public_organization_name(p_organization_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select o.name from public.organizations o where o.id = p_organization_id;
+$$;
+revoke all on function public.get_public_organization_name(uuid) from public;
+grant execute on function public.get_public_organization_name(uuid) to anon, authenticated;
+
+drop function if exists public.request_organization_join(text, text, text);
+create function public.request_organization_join(
+  p_organization_id uuid,
+  p_applicant_name text,
+  p_applicant_email text default null,
+  p_applicant_phone text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_organization_id uuid := p_organization_id;
+  normalized_name text;
+  normalized_email text;
+  normalized_phone text;
+  contact_key text;
+  request_headers jsonb;
+  requester_identity text;
+  requester_key_hash text;
+  request_limit integer;
+  requests_in_window integer;
+  window_started_at timestamptz;
+  retry_after_seconds integer;
+  join_request public.organization_join_requests;
+begin
+  if target_organization_id is null or not exists (
+    select 1 from public.organizations where id = target_organization_id
+  ) then
+    raise exception 'target organization not found';
+  end if;
+  if auth.uid() is not null and exists (
+    select 1 from public.organization_members
+     where organization_id = target_organization_id
+       and user_id = auth.uid()
+       and is_active
+  ) then
+    raise exception 'account already belongs to this organization';
+  end if;
+  normalized_name := btrim(coalesce(p_applicant_name, ''));
+  normalized_email := lower(nullif(btrim(coalesce(p_applicant_email, '')), ''));
+  normalized_phone := nullif(btrim(coalesce(p_applicant_phone, '')), '');
+  if length(normalized_name) < 2 or length(normalized_name) > 100 then
+    raise exception 'applicant name must be between 2 and 100 characters';
+  end if;
+  if (normalized_email is null) = (normalized_phone is null) then
+    raise exception 'provide exactly one contact method';
+  end if;
+  if normalized_email is not null and normalized_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception 'valid email is required';
+  end if;
+  if normalized_phone is not null and normalized_phone !~ '^\+[1-9][0-9]{7,14}$' then
+    raise exception 'valid E.164 phone is required';
+  end if;
+  if exists (
+    select 1 from public.organization_invitations i
+     where i.organization_id = target_organization_id
+       and i.accepted_at is null
+       and i.revoked_at is null
+       and i.expires_at > now()
+       and (
+         (normalized_email is not null and lower(i.email) = normalized_email)
+         or (normalized_phone is not null and i.phone = normalized_phone)
+       )
+  ) then
+    raise exception 'use the pending invitation for this contact';
+  end if;
+  if exists (
+    select 1 from public.organization_join_requests r
+     where r.organization_id = target_organization_id
+       and r.status = 'approved'
+       and (
+         (normalized_email is not null and lower(r.applicant_email) = normalized_email)
+         or (normalized_phone is not null and r.applicant_phone = normalized_phone)
+       )
+  ) then
+    raise exception 'this contact already has an approved access request';
+  end if;
+
+  contact_key := coalesce(normalized_email, normalized_phone);
+  perform pg_advisory_xact_lock(hashtextextended(target_organization_id::text || ':' || contact_key, 0));
+  select * into join_request
+    from public.organization_join_requests r
+   where r.organization_id = target_organization_id
+     and r.status = 'pending'
+     and (
+       (normalized_email is not null and lower(r.applicant_email) = normalized_email)
+       or (normalized_phone is not null and r.applicant_phone = normalized_phone)
+     )
+   order by r.requested_at desc
+   limit 1;
+
+  if join_request.id is null then
+    if (
+      select count(*)
+        from public.organization_join_requests r
+       where r.organization_id = target_organization_id
+         and r.requested_at > now() - interval '1 hour'
+         and (
+           (normalized_email is not null and lower(r.applicant_email) = normalized_email)
+           or (normalized_phone is not null and r.applicant_phone = normalized_phone)
+         )
+    ) >= 3 then
+      raise exception 'too many access requests for this contact';
+    end if;
+    request_headers := coalesce(nullif(current_setting('request.headers', true), '')::jsonb, '{}'::jsonb);
+    requester_identity := coalesce(
+      nullif(btrim(request_headers ->> 'cf-connecting-ip'), ''),
+      nullif(btrim(request_headers ->> 'x-real-ip'), ''),
+      nullif(btrim(reverse(split_part(reverse(coalesce(request_headers ->> 'x-forwarded-for', '')), ',', 1))), ''),
+      'name:' || lower(regexp_replace(normalized_name, '\s+', ' ', 'g'))
+    );
+    request_limit := case when requester_identity like 'name:%' then 3 else 10 end;
+    requester_key_hash := encode(
+      extensions.digest(target_organization_id::text || ':' || requester_identity, 'sha256'),
+      'hex'
+    );
+    delete from public.organization_join_request_rate_limits expired_limit
+     where expired_limit.window_started_at <= now() - interval '1 hour';
+    insert into public.organization_join_request_rate_limits as current_limit (
+      requester_hash, window_started_at, request_count
+    ) values (requester_key_hash, now(), 1)
+    on conflict (requester_hash) do update
+       set window_started_at = case
+             when current_limit.window_started_at <= now() - interval '1 hour' then now()
+             else current_limit.window_started_at
+           end,
+           request_count = case
+             when current_limit.window_started_at <= now() - interval '1 hour' then 1
+             else least(current_limit.request_count + 1, request_limit + 1)
+           end
+    returning current_limit.request_count, current_limit.window_started_at
+         into requests_in_window, window_started_at;
+    if requests_in_window > request_limit then
+      retry_after_seconds := greatest(
+        1, ceil(extract(epoch from window_started_at + interval '1 hour' - now()))::integer
+      );
+      return jsonb_build_object('rate_limited', true, 'retry_after_seconds', retry_after_seconds);
+    end if;
+    insert into public.organization_join_requests (
+      organization_id, user_id, applicant_name, applicant_email, applicant_phone
+    ) values (
+      target_organization_id, auth.uid(), normalized_name, normalized_email, normalized_phone
+    )
+    returning * into join_request;
+  end if;
+  return jsonb_build_object(
+    'id', join_request.id,
+    'applicant_name', join_request.applicant_name,
+    'applicant_email', join_request.applicant_email,
+    'applicant_phone', join_request.applicant_phone,
+    'status', join_request.status,
+    'professional_id', join_request.professional_id,
+    'requested_at', join_request.requested_at,
+    'reviewed_at', join_request.reviewed_at
+  );
+end;
+$$;
+revoke all on function public.request_organization_join(uuid, text, text, text) from public;
+grant execute on function public.request_organization_join(uuid, text, text, text) to anon, authenticated;
+
+create or replace function public.accept_organization_invitation(p_token text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  invitation public.organization_invitations;
+  current_email text;
+  current_phone text;
+  current_phone_confirmed boolean;
+begin
+  if auth.uid() is null then raise exception 'authentication required'; end if;
+  if nullif(btrim(coalesce(p_token, '')), '') is null then raise exception 'invitation token is required'; end if;
+  select * into invitation
+    from public.organization_invitations
+   where token_hash = encode(extensions.digest(btrim(p_token), 'sha256'), 'hex')
+   for update;
+  if invitation.id is null then raise exception 'invitation not found or invalid'; end if;
+  if invitation.revoked_at is not null then raise exception 'invitation was revoked'; end if;
+  if invitation.accepted_at is not null then raise exception 'invitation was already used'; end if;
+  if invitation.expires_at <= now() then raise exception 'invitation has expired'; end if;
+  select lower(email), phone, phone_confirmed_at is not null
+    into current_email, current_phone, current_phone_confirmed
+    from auth.users where id = auth.uid();
+  if invitation.phone is not null then
+    if current_phone is null or current_phone_confirmed is not true then
+      raise exception 'invitation phone not confirmed';
+    end if;
+    if current_phone <> invitation.phone then raise exception 'this invitation belongs to another phone'; end if;
+  elsif current_email is null or current_email <> lower(invitation.email) then
+    raise exception 'this invitation belongs to another email';
+  end if;
+  if exists (
+    select 1 from public.organization_members
+     where organization_id = invitation.organization_id
+       and user_id = auth.uid()
+       and is_active
+  ) then
+    raise exception 'you already belong to this organization';
+  end if;
+  if exists (
+    select 1 from public.organization_members
+     where organization_id = invitation.organization_id
+       and professional_id = invitation.professional_id
+       and is_active
+  ) then
+    raise exception 'professional is already linked to another account';
+  end if;
+  insert into public.organization_members (organization_id, user_id, role, professional_id)
+  values (invitation.organization_id, auth.uid(), invitation.role, invitation.professional_id);
+  perform set_config('barber_manager.allow_context_update', 'on', true);
+  update public.profiles
+     set default_organization_id = invitation.organization_id, updated_at = now()
+   where id = auth.uid();
+  update public.organization_invitations
+     set accepted_at = now(), accepted_by = auth.uid()
+   where id = invitation.id;
+  return jsonb_build_object(
+    'organization_id', invitation.organization_id,
+    'role', invitation.role,
+    'professional_id', invitation.professional_id
+  );
+end;
+$$;
+revoke all on function public.accept_organization_invitation(text) from public, anon;
+grant execute on function public.accept_organization_invitation(text) to authenticated;
+
+create or replace function public.approve_organization_join_request(
+  p_request_id uuid,
+  p_professional_id text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  join_request public.organization_join_requests;
+  professional public.professionals;
+begin
+  if auth.uid() is null or not public.is_manager() then
+    raise exception 'only managers can approve access requests';
+  end if;
+  select * into join_request
+    from public.organization_join_requests
+   where id = p_request_id
+     and organization_id = public.current_organization_id()
+     and status = 'pending'
+   for update;
+  if join_request.id is null then raise exception 'pending access request not found'; end if;
+  select * into professional
+    from public.professionals
+   where id = p_professional_id
+     and organization_id = join_request.organization_id
+     and is_active
+   for update;
+  if professional.id is null then raise exception 'active professional profile not found'; end if;
+  if join_request.user_id is not null and exists (
+    select 1 from public.organization_members
+     where user_id = join_request.user_id
+       and organization_id = join_request.organization_id
+       and is_active
+  ) then
+    raise exception 'applicant already belongs to this organization';
+  end if;
+  if exists (
+    select 1 from public.organization_members
+     where organization_id = join_request.organization_id
+       and professional_id = professional.id
+       and is_active
+  ) or exists (
+    select 1 from public.organization_join_requests
+     where organization_id = join_request.organization_id
+       and professional_id = professional.id
+       and status = 'approved'
+       and id <> join_request.id
+  ) then
+    raise exception 'professional profile is already linked or reserved';
+  end if;
+  update public.organization_join_requests
+     set status = 'approved', professional_id = professional.id,
+         reviewed_at = now(), reviewed_by = auth.uid()
+   where id = join_request.id;
+  return jsonb_build_object(
+    'organization_id', join_request.organization_id,
+    'professional_id', professional.id,
+    'role', professional.role
+  );
+end;
+$$;
+revoke all on function public.approve_organization_join_request(uuid, text) from public, anon;
+grant execute on function public.approve_organization_join_request(uuid, text) to authenticated;
+
+insert into public.deployment_settings (setting_key, enabled)
+values ('organization_creation_enabled', true)
+on conflict (setting_key) do update set enabled = true, updated_at = now();
+insert into public.schema_metadata (key, value)
+values ('app_schema_version', '2026-11-13.2')
+on conflict (key) do update set value = excluded.value, updated_at = now();
+notify pgrst, 'reload schema';
+commit;
+
+-- Standalone product sales capture price, quantity, discount, and total at sale
+-- time. Stock updates and the sale row are committed in the same transaction.
+create or replace function public.record_product_sale(
+  p_date text,
+  p_client_id text,
+  p_appointment_id text,
+  p_payment_method text,
+  p_items jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_organization_id uuid;
+  v_sale_id text := gen_random_uuid()::text;
+  v_item jsonb;
+  v_product public.products;
+  v_product_id text;
+  v_quantity integer;
+  v_discount_type text;
+  v_discount_value numeric;
+  v_unit_price numeric;
+  v_subtotal numeric;
+  v_discount_amount numeric;
+  v_line_total numeric;
+  v_total numeric := 0;
+  v_items jsonb := '[]'::jsonb;
+  v_rows integer;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication_required' using errcode = '42501';
+  end if;
+  v_organization_id := public.current_organization_id();
+  if v_organization_id is null or not public.has_permission('produtos') then
+    raise exception 'product_sale_permission_required' using errcode = '42501';
+  end if;
+  if p_date is null or p_date !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+     or p_date <> timezone('America/Sao_Paulo', clock_timestamp())::date::text then
+    raise exception 'product_sale_date_must_be_today' using errcode = '22023';
+  end if;
+  if p_payment_method not in ('debito', 'credito', 'pix', 'dinheiro') then
+    raise exception 'invalid_product_sale_payment_method' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'product_sale_items_required' using errcode = '22023';
+  end if;
+  if p_client_id is not null and not exists (
+    select 1 from public.clients client
+    where client.id = p_client_id and client.organization_id = v_organization_id
+  ) then
+    raise exception 'product_sale_client_not_found' using errcode = 'P0001';
+  end if;
+  if p_appointment_id is not null and not exists (
+    select 1 from public.appointments appointment
+    where appointment.id = p_appointment_id and appointment.organization_id = v_organization_id
+  ) then
+    raise exception 'product_sale_appointment_not_found' using errcode = 'P0001';
+  end if;
+
+  for v_item in
+    select item.value
+      from jsonb_array_elements(p_items) as item(value)
+     order by item.value->>'productId'
+  loop
+    v_product_id := nullif(btrim(v_item->>'productId'), '');
+    if v_product_id is null
+       or coalesce(v_item->>'quantity', '') !~ '^[1-9][0-9]*$'
+       or coalesce(v_item->>'discountValue', '0') !~ '^[0-9]+([.][0-9]{1,2})?$' then
+      raise exception 'invalid_product_sale_item' using errcode = '22023';
+    end if;
+    v_quantity := (v_item->>'quantity')::integer;
+    v_discount_type := coalesce(nullif(v_item->>'discountType', ''), 'amount');
+    v_discount_value := coalesce((v_item->>'discountValue')::numeric, 0);
+    if v_discount_type not in ('amount', 'percent')
+       or v_discount_value < 0
+       or (v_discount_type = 'percent' and v_discount_value > 100) then
+      raise exception 'invalid_product_sale_discount' using errcode = '22023';
+    end if;
+
+    select product.*
+      into v_product
+      from public.products product
+     where product.id = v_product_id
+       and product.organization_id = v_organization_id
+       and product.is_active
+     for update;
+    if not found then
+      raise exception 'product_sale_product_not_found' using errcode = 'P0001';
+    end if;
+    if v_product.stock < v_quantity then
+      raise exception 'product_sale_insufficient_stock:%:%', v_product.name, v_product.stock using errcode = 'P0001';
+    end if;
+
+    v_unit_price := round(v_product.price::numeric, 2);
+    v_subtotal := round(v_unit_price * v_quantity, 2);
+    v_discount_amount := case
+      when v_discount_type = 'percent'
+        then round(v_subtotal * v_discount_value / 100, 2)
+      else round(v_discount_value, 2)
+    end;
+    if v_discount_amount > v_subtotal then
+      raise exception 'product_sale_discount_exceeds_subtotal' using errcode = '22023';
+    end if;
+    v_line_total := round(v_subtotal - v_discount_amount, 2);
+    if v_line_total < 0 then
+      raise exception 'product_sale_negative_total' using errcode = '22023';
+    end if;
+    v_total := v_total + v_line_total;
+    v_items := v_items || jsonb_build_array(jsonb_build_object(
+      'productId', v_product.id,
+      'productName', v_product.name,
+      'unitPrice', v_unit_price,
+      'quantity', v_quantity,
+      'discountType', v_discount_type,
+      'discountValue', v_discount_value,
+      'discountAmount', v_discount_amount,
+      'total', v_line_total
+    ));
+
+    update public.products
+       set stock = stock - v_quantity,
+           updated_at = now()
+     where id = v_product.id
+       and organization_id = v_organization_id
+       and stock >= v_quantity;
+    get diagnostics v_rows = row_count;
+    if v_rows <> 1 then
+      raise exception 'product_sale_insufficient_stock:%:%', v_product.name, v_product.stock using errcode = 'P0001';
+    end if;
+  end loop;
+
+  insert into public.product_sales (
+    id, date, client_id, appointment_id, payment_method, items, total,
+    organization_id, created_by
+  ) values (
+    v_sale_id, p_date, p_client_id, p_appointment_id, p_payment_method,
+    v_items, v_total, v_organization_id, auth.uid()
+  );
+
+  return jsonb_build_object(
+    'id', v_sale_id, 'date', p_date, 'client_id', p_client_id,
+    'appointment_id', p_appointment_id, 'payment_method', p_payment_method,
+    'items', v_items, 'total', v_total, 'created_at', now()
+  );
+end;
+$$;
+revoke all on function public.record_product_sale(text, text, text, text, jsonb)
+  from public, anon;
+grant execute on function public.record_product_sale(text, text, text, text, jsonb)
+  to authenticated;
+
+-- Reversals preserve the original sale snapshot and are idempotent under
+-- concurrent requests: the sale row lock allows stock to be restored only once.
+create or replace function public.reverse_product_sale(
+  p_sale_id text,
+  p_reason text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_organization_id uuid;
+  v_sale public.product_sales;
+  v_item jsonb;
+  v_product_id text;
+  v_quantity bigint;
+  v_reversal_date text;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication_required' using errcode = '42501';
+  end if;
+  v_organization_id := public.current_organization_id();
+  if v_organization_id is null or not public.has_permission('produtos') then
+    raise exception 'product_sale_permission_required' using errcode = '42501';
+  end if;
+  if p_sale_id is null or length(btrim(p_sale_id)) = 0 then
+    raise exception 'product_sale_id_required' using errcode = '22023';
+  end if;
+  if p_reason is null or length(btrim(p_reason)) < 3 or length(btrim(p_reason)) > 500 then
+    raise exception 'invalid_product_sale_reversal_reason' using errcode = '22023';
+  end if;
+
+  select sale.*
+    into v_sale
+    from public.product_sales sale
+   where sale.id = p_sale_id
+     and sale.organization_id = v_organization_id
+   for update;
+  if not found then
+    raise exception 'product_sale_not_found' using errcode = 'P0001';
+  end if;
+  if v_sale.reversed_at is not null then
+    return to_jsonb(v_sale);
+  end if;
+  if jsonb_typeof(v_sale.items) <> 'array'
+     or jsonb_array_length(v_sale.items) = 0
+     or exists (
+       select 1
+         from jsonb_array_elements(v_sale.items) as item(value)
+        where coalesce(item.value->>'productId', '') = ''
+           or coalesce(item.value->>'quantity', '') !~ '^[1-9][0-9]*$'
+     ) then
+    raise exception 'invalid_product_sale_snapshot' using errcode = '22023';
+  end if;
+
+  for v_item in
+    select jsonb_build_object(
+             'productId', item.value->>'productId',
+             'quantity', sum((item.value->>'quantity')::bigint)
+           )
+      from jsonb_array_elements(v_sale.items) as item(value)
+     group by item.value->>'productId'
+     order by item.value->>'productId'
+  loop
+    v_product_id := v_item->>'productId';
+    v_quantity := (v_item->>'quantity')::bigint;
+    update public.products
+       set stock = stock + v_quantity,
+           updated_at = now()
+     where id = v_product_id
+       and organization_id = v_organization_id;
+    if not found then
+      raise exception 'product_sale_reversal_product_not_found:%', v_product_id using errcode = 'P0001';
+    end if;
+  end loop;
+
+  v_reversal_date := timezone('America/Sao_Paulo', clock_timestamp())::date::text;
+  update public.product_sales
+     set reversal_date = v_reversal_date,
+         reversal_reason = btrim(p_reason),
+         reversed_at = clock_timestamp(),
+         reversed_by = auth.uid()
+   where id = v_sale.id
+     and organization_id = v_organization_id
+  returning * into v_sale;
+
+  return to_jsonb(v_sale);
+end;
+$$;
+
+revoke all on function public.reverse_product_sale(text, text)
+  from public, anon;
+grant execute on function public.reverse_product_sale(text, text)
+  to authenticated;
+
+-- Reception can see same-day operational aggregates without access to finance
+-- tables or historical reporting.
+create or replace function public.get_reception_daily_operations(p_date text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_organization_id uuid;
+  v_income jsonb := '{"debito":0,"credito":0,"pix":0,"dinheiro":0}'::jsonb;
+  v_expense jsonb := '{"debito":0,"credito":0,"pix":0,"dinheiro":0}'::jsonb;
+  v_plan_receipts jsonb := '{"debito":0,"credito":0,"pix":0,"dinheiro":0,"sem_forma":0}'::jsonb;
+  v_payment jsonb;
+  v_appointment record;
+  v_plan record;
+  v_exp record;
+  v_sales record;
+  v_method text;
+  v_attendances integer := 0;
+  v_plan_uses integer := 0;
+  v_expense_total numeric := 0;
+  v_income_total numeric := 0;
+  v_income_without_method numeric := 0;
+  v_plan_total numeric := 0;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication_required' using errcode = '42501';
+  end if;
+  v_organization_id := public.current_organization_id();
+  if v_organization_id is null
+     or not (
+       public.is_manager()
+       or (public.current_user_role() = 'recepcao' and public.has_permission('controle'))
+     ) then
+    raise exception 'daily_operations_permission_required' using errcode = '42501';
+  end if;
+  if p_date is distinct from timezone('America/Sao_Paulo', clock_timestamp())::date::text then
+    raise exception 'daily_operations_current_day_only' using errcode = '42501';
+  end if;
+
+  for v_appointment in
+    select appointment.*
+      from public.appointments appointment
+     where appointment.organization_id = v_organization_id
+       and appointment.date = p_date
+       and appointment.status in ('confirmed', 'completed')
+       and (appointment.status = 'completed' or appointment.attendance_recorded_at is not null)
+  loop
+    v_attendances := v_attendances + 1;
+    if v_appointment.plan_subscriber_id is not null
+       and v_appointment.attendance_recorded_at is not null then
+      v_plan_uses := v_plan_uses + 1;
+    end if;
+    if jsonb_typeof(v_appointment.payment_splits) = 'array'
+       and jsonb_array_length(v_appointment.payment_splits) > 0 then
+      for v_payment in select value from jsonb_array_elements(v_appointment.payment_splits)
+      loop
+        v_method := v_payment->>'method';
+        if v_method in ('debito', 'credito', 'pix', 'dinheiro') then
+          v_income := jsonb_set(
+            v_income, array[v_method],
+            to_jsonb(coalesce((v_income->>v_method)::numeric, 0) + coalesce((v_payment->>'amount')::numeric, 0))
+          );
+          v_income_total := v_income_total + coalesce((v_payment->>'amount')::numeric, 0);
+        end if;
+      end loop;
+    elsif v_appointment.pay_method in ('debito', 'credito', 'pix', 'dinheiro') then
+      v_income := jsonb_set(
+        v_income, array[v_appointment.pay_method],
+        to_jsonb(coalesce((v_income->>v_appointment.pay_method)::numeric, 0) + v_appointment.value + v_appointment.tip)
+      );
+      v_income_total := v_income_total + v_appointment.value + v_appointment.tip;
+    end if;
+  end loop;
+
+  for v_sales in
+    select movements.payment_method, sum(movements.total)::numeric as total
+      from (
+        select sale.payment_method, sale.total as total
+          from public.product_sales sale
+         where sale.organization_id = v_organization_id and sale.date = p_date
+        union all
+        select sale.payment_method, -sale.total as total
+          from public.product_sales sale
+         where sale.organization_id = v_organization_id and sale.reversal_date = p_date
+      ) as movements
+     group by movements.payment_method
+  loop
+    v_income := jsonb_set(
+      v_income, array[v_sales.payment_method],
+      to_jsonb(coalesce((v_income->>v_sales.payment_method)::numeric, 0) + v_sales.total)
+    );
+    v_income_total := v_income_total + v_sales.total;
+  end loop;
+
+  for v_sales in
+    select sale.pay_method1 as payment_method,
+           sum(case when sale.installments > 0
+             then sale.value::numeric * sale.installments_paid / sale.installments
+             else 0 end) as total
+      from public.prothesis_sales sale
+     where sale.organization_id = v_organization_id and sale.date = p_date
+     group by sale.pay_method1
+  loop
+    if v_sales.payment_method in ('debito', 'credito', 'pix', 'dinheiro') then
+      v_income := jsonb_set(
+        v_income, array[v_sales.payment_method],
+        to_jsonb(coalesce((v_income->>v_sales.payment_method)::numeric, 0) + v_sales.total)
+      );
+      v_income_total := v_income_total + v_sales.total;
+    end if;
+  end loop;
+
+  for v_sales in
+    select income.payment_method, sum(income.amount)::numeric as total
+      from public.incomes income
+     where income.organization_id = v_organization_id and income.date = p_date
+     group by income.payment_method
+  loop
+    v_income_total := v_income_total + v_sales.total;
+    if v_sales.payment_method in ('debito', 'credito', 'pix', 'dinheiro') then
+      v_income := jsonb_set(
+        v_income, array[v_sales.payment_method],
+        to_jsonb(coalesce((v_income->>v_sales.payment_method)::numeric, 0) + v_sales.total)
+      );
+    else
+      v_income_without_method := v_income_without_method + v_sales.total;
+    end if;
+  end loop;
+
+  for v_plan in
+    select payment.payment_method, sum(payment.amount)::numeric as total
+      from public.subscription_payments payment
+     where payment.organization_id = v_organization_id
+       and payment.status = 'pago'
+       and coalesce(payment.paid_at, payment.due_date) = p_date
+     group by payment.payment_method
+  loop
+    v_plan_total := v_plan_total + v_plan.total;
+    if v_plan.payment_method in ('debito', 'credito', 'pix', 'dinheiro') then
+      v_plan_receipts := jsonb_set(
+        v_plan_receipts, array[v_plan.payment_method],
+        to_jsonb(coalesce((v_plan_receipts->>v_plan.payment_method)::numeric, 0) + v_plan.total)
+      );
+    else
+      v_plan_receipts := jsonb_set(
+        v_plan_receipts, '{sem_forma}',
+        to_jsonb(coalesce((v_plan_receipts->>'sem_forma')::numeric, 0) + v_plan.total)
+      );
+    end if;
+  end loop;
+
+  for v_exp in
+    select expense.payment_method, sum(expense.amount)::numeric as total
+      from public.expenses expense
+     where expense.organization_id = v_organization_id and expense.date = p_date
+     group by expense.payment_method
+  loop
+    v_expense_total := v_expense_total + v_exp.total;
+    if v_exp.payment_method in ('debito', 'credito', 'pix', 'dinheiro') then
+      v_expense := jsonb_set(
+        v_expense, array[v_exp.payment_method],
+        to_jsonb(coalesce((v_expense->>v_exp.payment_method)::numeric, 0) + v_exp.total)
+      );
+    end if;
+  end loop;
+
+  return jsonb_build_object(
+    'date', p_date, 'attendances', v_attendances, 'planUses', v_plan_uses,
+    'incomeByMethod', v_income, 'incomeTotal', v_income_total,
+    'incomeWithoutMethod', v_income_without_method,
+    'expenseByMethod', v_expense, 'expenseTotal', v_expense_total,
+    'planReceiptsByMethod', v_plan_receipts, 'planReceiptTotal', v_plan_total
+  );
+end;
+$$;
+revoke all on function public.get_reception_daily_operations(text)
+  from public, anon;
+grant execute on function public.get_reception_daily_operations(text)
+  to authenticated;
+
+insert into public.schema_metadata (key, value)
+values ('app_schema_version', '2026-11-12.1')
+on conflict (key) do update
+  set value = excluded.value, updated_at = now();
+
+notify pgrst, 'reload schema';
+
+-- Keep a restricted recovery copy before any appointment is removed.
+create table if not exists public.appointment_deletion_archive (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null,
+  appointment_id text not null,
+  deleted_at timestamptz not null default clock_timestamp(),
+  deleted_by uuid,
+  deleted_by_role text,
+  appointment_data jsonb not null
+);
+
+create index if not exists appointment_deletion_archive_org_deleted_at_idx
+  on public.appointment_deletion_archive (organization_id, deleted_at desc);
+
+alter table public.appointment_deletion_archive enable row level security;
+revoke all on table public.appointment_deletion_archive from public, anon, authenticated;
+
+comment on table public.appointment_deletion_archive is
+  'Restricted recovery archive for appointments removed from the live table.';
+
+create or replace function public.archive_deleted_appointment()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  insert into public.appointment_deletion_archive (
+    organization_id,
+    appointment_id,
+    deleted_by,
+    deleted_by_role,
+    appointment_data
+  )
+  values (
+    old.organization_id,
+    old.id,
+    auth.uid(),
+    public.current_user_role(),
+    to_jsonb(old)
+  );
+
+  return old;
+end;
+$$;
+
+revoke all on function public.archive_deleted_appointment()
+  from public, anon, authenticated;
+
+drop trigger if exists appointments_archive_delete on public.appointments;
+create trigger appointments_archive_delete
+after delete on public.appointments
+for each row execute function public.archive_deleted_appointment();
+
+insert into public.schema_metadata (key, value)
+values ('app_schema_version', '2026-11-12.1')
+on conflict (key) do update
+  set value = excluded.value, updated_at = now();
+
+-- Remove retired objects that can remain in databases upgraded from legacy
+-- schemas; omission from the canonical source alone does not remove them.
+drop function if exists public.create_organization_invitation_by_phone(text, text, integer);
+drop table if exists public.chatwoot_integrations cascade;
+
+-- Keep the complete install script aligned with the latest access-control migration.
+insert into public.schema_metadata (key, value)
+values ('app_schema_version', '2026-11-13.5')
 on conflict (key) do update
   set value = excluded.value, updated_at = now();
 

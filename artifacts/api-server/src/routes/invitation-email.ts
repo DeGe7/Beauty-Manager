@@ -10,7 +10,7 @@ import { Router, type Request, type Response as ExpressResponse } from "express"
 const router = Router();
 const connectors = new ReplitConnectors();
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const sender = "Barber Manager <nao-responda@auth.msstudios.com.br>";
+const sender = "Beauty Manager <nao-responda@auth.msstudios.com.br>";
 
 type AuthContext = {
   token: string;
@@ -422,15 +422,15 @@ router.post("/invitations/:invitationId/email", async (req, res) => {
     const text = [
       "Olá!",
       "",
-      "Você recebeu um convite para entrar na equipe do Barber Manager.",
+      "Você recebeu um convite para entrar na equipe do Beauty Manager.",
       `Acesse este link para continuar: ${invitationUrl}`,
       "",
       "Se você não esperava este convite, pode ignorar esta mensagem.",
     ].join("\n");
     const html = [
       '<div style="font-family:Arial,sans-serif;color:#222;line-height:1.6;max-width:560px;margin:0 auto;padding:24px">',
-      '<h1 style="font-size:22px">Convite para o Barber Manager</h1>',
-      "<p>Olá! Você recebeu um convite para entrar na equipe do Barber Manager.</p>",
+      '<h1 style="font-size:22px">Convite para o Beauty Manager</h1>',
+      "<p>Olá! Você recebeu um convite para entrar na equipe do Beauty Manager.</p>",
       `<p style="margin:28px 0"><a href="${safeUrl}" style="background:#c9a94d;color:#151515;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:700">Aceitar convite</a></p>`,
       `<p>Se o botão não abrir, copie este link para o navegador:<br><a href="${safeUrl}">${safeUrl}</a></p>`,
       "<p>Se você não esperava este convite, pode ignorar esta mensagem.</p>",
@@ -448,7 +448,7 @@ router.post("/invitations/:invitationId/email", async (req, res) => {
         body: JSON.stringify({
           from: sender,
           to: invitation.email.trim(),
-          subject: "Convite para o Barber Manager",
+          subject: "Convite para o Beauty Manager",
           text,
           html,
         }),

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore, brl, ClientSource } from '@/data/store';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
@@ -14,14 +15,33 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { formatDateKey, parseDateKey } from '@/data/date';
 import { normalizeClientPhone } from '@/data/client-phone';
+import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
+import { useTemporaryFormState } from '@/data/form-drafts';
 
 const TABS = ['Todos', 'Aniversariantes', 'Inativos', 'Origem / CAC'] as const;
+const getClientTabId = (index: number) => `clientes-tab-${index}`;
+const getClientPanelId = (index: number) => `clientes-tab-panel-${index}`;
 
 export default function Clientes() {
   const { clients, addClient, updateClient, removeClient, addVisit, removeVisit, isLoading } = useStore();
+  const recentlyAddedClientIds = useRecentlyAddedIds(clients, isLoading);
 
   const [activeTab, setActiveTab] = useState<typeof TABS[number]>('Todos');
   const [search, setSearch] = useState('');
+  const activeTabIndex = TABS.indexOf(activeTab);
+
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % TABS.length;
+    if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = TABS.length - 1;
+    if (nextIndex === null) return;
+
+    event.preventDefault();
+    setActiveTab(TABS[nextIndex]);
+    document.getElementById(getClientTabId(nextIndex))?.focus();
+  };
   
   const today = new Date();
   const currentMonth = formatDateKey(today).slice(5, 7);
@@ -53,25 +73,48 @@ export default function Clientes() {
     return { origem, count: origClients.length, revenue, ticket: origClients.length ? revenue / origClients.length : 0 };
   }).filter(o => o.count > 0).sort((a,b) => b.count - a.count);
 
-  const [isOpen, setIsOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string|null>(null);
-  const [form, setForm] = useState({ name: '', whatsapp: '', email: '', birthday: '', source: 'Indicação' as ClientSource, sourceOther: '', interest: 'barbearia' as const });
+  const [clientEditor, setClientEditor, clearClientEditor] = useTemporaryFormState(
+    'client-editor',
+    'clientes',
+    {
+      isOpen: false,
+      editingId: null as string | null,
+      form: { name: '', whatsapp: '', email: '', birthday: '', source: 'Indicação' as ClientSource, sourceOther: '', interest: 'barbearia' as const },
+    },
+  );
+  const { isOpen, editingId, form } = clientEditor;
+  const setForm = (update: typeof form | ((current: typeof form) => typeof form)) => {
+    setClientEditor(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
 
   const handleOpenEdit = (c: any) => {
-    setEditingId(c.id);
-    setForm({ name: c.name, whatsapp: c.whatsapp, email: c.email || '', birthday: c.birthday || '', source: c.source || 'Indicação', sourceOther: c.sourceOther || '', interest: c.interest || 'barbearia' });
-    setIsOpen(true);
+    setClientEditor({
+      isOpen: true,
+      editingId: c.id,
+      form: { name: c.name, whatsapp: c.whatsapp, email: c.email || '', birthday: c.birthday || '', source: c.source || 'Indicação', sourceOther: c.sourceOther || '', interest: c.interest || 'barbearia' },
+    });
   };
 
   const handleOpenNew = () => {
-    setEditingId(null);
-    setForm({ name: '', whatsapp: '', email: '', birthday: '', source: 'Indicação', sourceOther: '', interest: 'barbearia' });
-    setIsOpen(true);
+    setClientEditor(current => current.isOpen
+      ? { ...current, editingId: null }
+      : {
+          isOpen: true,
+          editingId: null,
+          form: { name: '', whatsapp: '', email: '', birthday: '', source: 'Indicação', sourceOther: '', interest: 'barbearia' },
+        });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name || !form.whatsapp) { toast.error('Nome e WhatsApp são obrigatórios'); return; }
+    if (!form.name.trim()) { toast.error('Informe o nome do cliente'); return; }
+    if (!form.whatsapp.trim() && !form.email.trim()) {
+      toast.error('Informe pelo menos o WhatsApp ou o e-mail para poder falar com o cliente.');
+      return;
+    }
     if (form.source === 'Outro' && !form.sourceOther.trim()) { toast.error('Descreva a origem do cliente'); return; }
     const normalizedPhone = normalizeClientPhone(form.whatsapp);
     const duplicatePhone = normalizedPhone.length > 0 && clients.some(client =>
@@ -85,11 +128,35 @@ export default function Clientes() {
       : saved && typeof saved === 'object' && !saved.wasCreated
         ? 'Telefone já cadastrado; cliente existente mantido.'
         : 'Cliente cadastrado');
-    setIsOpen(false);
+    clearClientEditor();
   };
 
   const [selectedClient, setSelectedClient] = useState<any>(null);
-  const [visitForm, setVisitForm] = useState({ date: formatDateKey(today), type: 'servico' as 'servico'|'produto', description: '', professional: '', amount: 0 });
+  const [visitDraft, setVisitDraft, clearVisitDraft] = useTemporaryFormState(
+    'client-manual-visit',
+    'clientes',
+    {
+      clientId: null as string | null,
+      form: { date: formatDateKey(today), type: 'servico' as 'servico'|'produto', description: '', professional: '', amount: 0 },
+    },
+  );
+  const visitForm = visitDraft.form;
+  const setVisitForm = (update: typeof visitForm | ((current: typeof visitForm) => typeof visitForm)) => {
+    setVisitDraft(current => ({
+      ...current,
+      clientId: selectedClient?.id ?? current.clientId,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
+  const openClientDetails = (client: any) => {
+    setSelectedClient(client);
+    setVisitDraft(current => current.clientId === client.id
+      ? current
+      : {
+          clientId: client.id,
+          form: { date: formatDateKey(today), type: 'servico', description: '', professional: '', amount: 0 },
+        });
+  };
 
   useEffect(() => {
     if (!selectedClient) return;
@@ -103,7 +170,7 @@ export default function Clientes() {
     if (!selectedClient) return;
     if (!await addVisit(selectedClient.id, visitForm)) return;
     toast.success('Visita registrada');
-    setVisitForm({ date: formatDateKey(today), type: 'servico', description: '', professional: '', amount: 0 });
+    clearVisitDraft();
   };
 
   const sendWpp = (phone: string, text: string = '') => {
@@ -111,14 +178,23 @@ export default function Clientes() {
   };
 
   return (
-    <div className="min-w-0 p-3 sm:p-5 md:p-8 space-y-6 max-w-7xl mx-auto">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+    <div className="min-w-0 p-3 sm:p-5 md:p-8 space-y-5 md:space-y-6 max-w-7xl mx-auto">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 md:gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Clientes</h2>
-          <p className="text-sm text-muted-foreground mt-1">{clients.length} cadastrados • {bdaysCount} aniversários • {inativosCount} inativos</p>
+          <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Clientes</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+            Busque por nome, e-mail ou WhatsApp e consulte o histórico de visitas.
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground sm:text-sm">{clients.length} cadastrados · {bdaysCount} aniversários · {inativosCount} inativos</p>
         </div>
         
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <Dialog
+          open={isOpen}
+          onOpenChange={open => {
+            if (open) setClientEditor(current => ({ ...current, isOpen: true }));
+            else clearClientEditor();
+          }}
+        >
           <DialogTrigger asChild>
             <button onClick={handleOpenNew} className="min-h-11 w-full md:w-auto justify-center bg-brand-gold text-brand-bg px-4 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2 transition-all">
               <UserPlus className="w-4 h-4" /> Novo Cliente
@@ -133,8 +209,8 @@ export default function Clientes() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">WhatsApp *</label>
-                  <input type="text" required value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">WhatsApp{!form.email.trim() ? ' *' : ''}</label>
+                  <input type="tel" inputMode="tel" autoComplete="tel" required={!form.email.trim()} value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Data Nasc.</label>
@@ -143,8 +219,8 @@ export default function Clientes() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Email</label>
-                  <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">E-mail{!form.whatsapp.trim() ? ' *' : ''}</label>
+                  <input type="email" required={!form.whatsapp.trim()} value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
                 </div>
                   <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Origem</label>
@@ -152,6 +228,9 @@ export default function Clientes() {
                      <option>Indicação</option><option>Instagram</option><option>Google</option><option>Facebook</option><option>Site</option><option>Passou na rua</option><option>Outro</option>
                   </select>
                 </div>
+              </div>
+              <div className="flex justify-end">
+                <FeatureInfo label="Contato para follow-up">Informe WhatsApp ou e-mail para que a equipe possa entrar em contato com o cliente depois.</FeatureInfo>
               </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Interesse do cliente *</label>
@@ -171,15 +250,34 @@ export default function Clientes() {
         </Dialog>
       </div>
 
-      <div className="flex border-b border-brand-border overflow-x-auto hide-scrollbar">
-        {TABS.map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab)} className={`min-h-11 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === tab ? 'border-brand-gold text-brand-gold' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
+      <div role="tablist" aria-label="Seções de clientes" aria-orientation="horizontal" className="grid grid-cols-2 border-b border-brand-border sm:flex">
+        {TABS.map((tab, index) => (
+          <button
+            key={tab}
+            id={getClientTabId(index)}
+            type="button"
+            role="tab"
+            data-testid={`client-tab-${index}`}
+            aria-selected={activeTab === tab}
+            aria-controls={getClientPanelId(index)}
+            tabIndex={activeTab === tab ? 0 : -1}
+            onClick={() => setActiveTab(tab)}
+            onKeyDown={event => handleTabKeyDown(event, index)}
+            className={`min-h-11 px-3 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors sm:px-4 ${activeTab === tab ? 'border-brand-gold text-brand-gold' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          >
             {tab}
           </button>
         ))}
       </div>
 
-      <div className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-3 sm:p-6">
+      <div
+        id={getClientPanelId(activeTabIndex)}
+        role="tabpanel"
+        aria-labelledby={getClientTabId(activeTabIndex)}
+        tabIndex={0}
+        data-testid="client-tab-panel"
+        className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-3 sm:p-6"
+      >
         {isLoading ? (
           <div className="space-y-3">{Array.from({length: 5}).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
         ) : (
@@ -218,7 +316,7 @@ export default function Clientes() {
                             const isBday = c.birthday?.slice(5,7) === currentMonth;
 
                             return (
-                              <tr key={c.id} className="border-b border-brand-border/50 hover:bg-brand-bg/50 transition-colors">
+                              <tr key={c.id} className={`border-b border-brand-border/50 hover:bg-brand-bg/50 transition-colors ${recentlyAddedClientIds.has(c.id) ? 'bm-list-item-enter' : ''}`}>
                                 <td className="py-3 font-medium flex items-center gap-2">
                                   {c.name} {isBday && <Cake className="w-3 h-3 text-brand-gold" aria-label="Aniversário este mês" />}
                                 </td>
@@ -227,12 +325,16 @@ export default function Clientes() {
                                 <td className="py-3">{brl(tkm)}</td>
                                 <td className="py-3 text-right">
                                   <div className="flex justify-end gap-2">
-                                    <Dialog>
+                                    <Dialog onOpenChange={open => { if (!open) clearVisitDraft(); }}>
                                       <DialogTrigger asChild>
-                                        <button onClick={() => setSelectedClient(c)} aria-label={`Ver ficha de ${c.name}`} className="p-2 text-brand-gold hover:bg-brand-gold/10 rounded-lg transition-all hover:scale-105"><Eye className="w-4 h-4" /></button>
+                                        <button onClick={() => openClientDetails(c)} aria-label={`Ver ficha de ${c.name}`} className="p-2 text-brand-gold hover:bg-brand-gold/10 rounded-lg transition-all hover:scale-105"><Eye className="w-4 h-4" /></button>
                                       </DialogTrigger>
-                                      <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[90dvh] overflow-y-auto bg-brand-surface border-brand-border text-foreground sm:max-w-2xl">
-                                        <DialogHeader><DialogTitle>Ficha do Cliente: {selectedClient?.name}</DialogTitle></DialogHeader>
+                                      <DialogContent className="min-w-0 w-[calc(100vw-1.5rem)] max-h-[90dvh] overflow-y-auto bg-brand-surface border-brand-border text-foreground sm:max-w-2xl">
+                                        <DialogHeader className="min-w-0 max-w-full">
+                                          <DialogTitle className="min-w-0 w-full whitespace-normal">
+                                            <span className="block min-w-0 max-w-full break-words [overflow-wrap:anywhere]">Ficha do Cliente: {selectedClient?.name}</span>
+                                          </DialogTitle>
+                                        </DialogHeader>
                                         {selectedClient && (
                                           <div className="space-y-6 pt-4">
                                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-brand-bg p-4 rounded-xl border border-brand-border">
@@ -298,21 +400,26 @@ export default function Clientes() {
                         const tkm = c.visits.length ? total / c.visits.length : 0;
                         const isBday = c.birthday?.slice(5,7) === currentMonth;
                         return (
-                          <div data-testid={`mobile-client-card-${c.id}`} key={c.id} className="min-w-0 p-4 bg-brand-bg border border-brand-border rounded-xl">
+                          <div data-testid={`mobile-client-card-${c.id}`} key={c.id} className={`min-w-0 p-4 bg-brand-bg border border-brand-border rounded-xl ${recentlyAddedClientIds.has(c.id) ? 'bm-list-item-enter' : ''}`}>
                             <div className="flex justify-between items-start gap-2 mb-2">
                               <div className="min-w-0">
-                                <p data-testid={`mobile-client-name-${c.id}`} className="min-w-0 break-words [overflow-wrap:anywhere] font-bold text-sm flex items-center gap-1">
-                                  {c.name} {isBday && <Cake className="w-3 h-3 text-brand-gold" aria-label="Aniversário este mês" />}
+                                <p data-testid={`mobile-client-name-${c.id}`} className="flex min-w-0 items-start gap-1 text-sm font-bold">
+                                  <span className="min-w-0 break-words [overflow-wrap:anywhere]">{c.name}</span>
+                                  {isBday && <Cake className="mt-0.5 h-3 w-3 shrink-0 text-brand-gold" aria-label="Aniversário este mês" />}
                                 </p>
                                 <p className="text-xs text-muted-foreground">{c.whatsapp}</p>
                               </div>
                               <div className="flex shrink-0 gap-1">
-                                <Dialog>
+                                 <Dialog onOpenChange={open => { if (!open) clearVisitDraft(); }}>
                                   <DialogTrigger asChild>
-                                    <button onClick={() => setSelectedClient(c)} aria-label={`Ver ficha de ${c.name}`} className="flex min-h-11 min-w-11 items-center justify-center text-brand-gold hover:bg-brand-gold/10 rounded-lg transition-all hover:scale-105"><Eye className="w-4 h-4" /></button>
+                                     <button onClick={() => openClientDetails(c)} aria-label={`Ver ficha de ${c.name}`} className="flex min-h-11 min-w-11 items-center justify-center text-brand-gold hover:bg-brand-gold/10 rounded-lg transition-all hover:scale-105"><Eye className="w-4 h-4" /></button>
                                   </DialogTrigger>
-                                  <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[90dvh] overflow-y-auto bg-brand-surface border-brand-border text-foreground sm:max-w-2xl">
-                                    <DialogHeader><DialogTitle>Ficha: {selectedClient?.name}</DialogTitle></DialogHeader>
+                                   <DialogContent className="min-w-0 w-[calc(100vw-1.5rem)] max-h-[90dvh] overflow-y-auto bg-brand-surface border-brand-border text-foreground sm:max-w-2xl">
+                                    <DialogHeader className="min-w-0 max-w-full">
+                                      <DialogTitle className="min-w-0 w-full whitespace-normal">
+                                        <span className="block min-w-0 max-w-full break-words [overflow-wrap:anywhere]">Ficha: {selectedClient?.name}</span>
+                                      </DialogTitle>
+                                    </DialogHeader>
                                     {selectedClient && (
                                       <div className="space-y-5 pt-4">
                                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-brand-bg p-4 rounded-xl border border-brand-border">
@@ -336,7 +443,7 @@ export default function Clientes() {
                                           <div className="space-y-2">
                                             {selectedClient.visits.length === 0 ? <p className="text-sm text-muted-foreground">Nenhuma visita registrada.</p> :
                                               [...selectedClient.visits].sort((a,b) => b.date.localeCompare(a.date)).map((v:any) => (
-                                                <div data-testid={`mobile-client-visit-${v.id}`} key={v.id} className="flex min-w-0 flex-col sm:flex-row sm:justify-between sm:items-center gap-2 p-3 border border-brand-border/50 rounded-lg">
+                                                <div data-testid={`mobile-client-visit-card-${v.id}`} key={v.id} className="flex min-w-0 flex-col sm:flex-row sm:justify-between sm:items-center gap-2 p-3 border border-brand-border/50 rounded-lg">
                                                   <div className="min-w-0"><p data-testid={`mobile-client-visit-description-${v.id}`} className="min-w-0 text-sm font-medium break-words [overflow-wrap:anywhere]">{v.description}</p><p className="text-xs text-muted-foreground">{v.date.split('-').reverse().join('/')} • {v.type}</p></div>
                                                   <div className="flex items-center justify-between sm:justify-end gap-3"><span className="font-bold">{brl(v.amount)}</span><button aria-label="Remover visita" onClick={async () => { if (await removeVisit(selectedClient.id, v.id)) toast.success('Removido'); }} className="flex min-h-11 min-w-11 items-center justify-center text-destructive hover:bg-destructive/10 rounded transition-all"><Trash2 className="w-4 h-4"/></button></div>
                                                 </div>
@@ -381,7 +488,7 @@ export default function Clientes() {
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {aniversariantes.map(c => (
-                      <div data-testid={`birthday-client-card-${c.id}`} key={c.id} className="p-4 border border-brand-border rounded-xl bg-brand-bg flex flex-col gap-3">
+                      <div data-testid={`birthday-client-card-${c.id}`} key={c.id} className={`p-4 border border-brand-border rounded-xl bg-brand-bg flex flex-col gap-3 ${recentlyAddedClientIds.has(c.id) ? 'bm-list-item-enter' : ''}`}>
                         <div className="flex justify-between items-start">
                           <div className="min-w-0">
                             <p data-testid={`birthday-client-name-${c.id}`} className="min-w-0 break-words [overflow-wrap:anywhere] font-bold">{c.name}</p>
@@ -420,7 +527,7 @@ export default function Clientes() {
                         </thead>
                         <tbody>
                           {inativos.sort((a,b) => b.daysSince - a.daysSince).map(c => (
-                            <tr key={c.id} className="border-b border-brand-border/50 hover:bg-brand-bg/50 transition-colors">
+                            <tr key={c.id} className={`border-b border-brand-border/50 hover:bg-brand-bg/50 transition-colors ${recentlyAddedClientIds.has(c.id) ? 'bm-list-item-enter' : ''}`}>
                               <td className="py-3 font-medium">{c.name}</td>
                               <td className="py-3">{c.lastV?.split('-').reverse().join('/')}</td>
                               <td className="py-3 text-destructive font-bold">{c.daysSince} dias</td>
@@ -437,7 +544,7 @@ export default function Clientes() {
                     {/* Mobile cards */}
                     <div className="md:hidden space-y-3">
                       {inativos.sort((a,b) => b.daysSince - a.daysSince).map(c => (
-                         <div data-testid={`inactive-client-card-${c.id}`} key={c.id} className="p-4 bg-brand-bg border border-brand-border rounded-xl flex justify-between items-center gap-2">
+                         <div data-testid={`inactive-client-card-${c.id}`} key={c.id} className={`p-4 bg-brand-bg border border-brand-border rounded-xl flex justify-between items-center gap-2 ${recentlyAddedClientIds.has(c.id) ? 'bm-list-item-enter' : ''}`}>
                            <div className="min-w-0">
                              <p data-testid={`inactive-client-name-${c.id}`} className="min-w-0 break-words [overflow-wrap:anywhere] font-bold text-sm">{c.name}</p>
                             <p className="text-xs text-muted-foreground mt-0.5">Última: {c.lastV?.split('-').reverse().join('/')}</p>

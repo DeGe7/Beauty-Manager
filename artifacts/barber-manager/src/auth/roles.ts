@@ -65,7 +65,7 @@ export function getPermissionsForRole(role: Role | null, permissions?: string[])
   if (role === 'recepcao') {
     return [...new Set(rolePermissions.filter(permission =>
       !['financeiro', 'profissionais', 'configuracoes', 'comunicacao'].includes(permission),
-    ))];
+    ).concat('planos'))];
   }
   if (role !== 'vendedor') return [...new Set(rolePermissions)];
   return [...new Set([...rolePermissions.filter(permission => permission !== 'vendas'), 'controle'])];
@@ -95,16 +95,16 @@ export interface NavItem {
 }
 
 export const ALL_NAV_ITEMS: NavItem[] = [
-  { path: '/', label: 'Dashboard', icon: 'LayoutDashboard' },
-  { path: '/controle', label: 'Controle Diário', icon: 'Calendar' },
-  { path: '/agenda', label: 'Agenda', icon: 'CalendarCheck' },
-  { path: '/clientes', label: 'Clientes', icon: 'UserPlus' },
-  { path: '/profissionais', label: 'Profissionais', icon: 'Users' },
-  { path: '/produtos', label: 'Produtos & Estoque', icon: 'Package' },
-  { path: '/planos', label: 'Planos & Mensalidades', icon: 'CreditCard' },
-  { path: '/financeiro', label: 'Financeiro', icon: 'DollarSign' },
-  { path: '/comunicacao', label: 'Disparos de Mensagens', icon: 'MessageSquare' },
-  { path: '/configuracoes', label: 'Configurações', icon: 'Settings' },
+  { path: '/', label: 'Dashboard', icon: 'PanelsTopLeft' },
+  { path: '/controle', label: 'Controle Diário', icon: 'ClipboardClock' },
+  { path: '/agenda', label: 'Agenda', icon: 'CalendarDays' },
+  { path: '/clientes', label: 'Clientes', icon: 'ContactRound' },
+  { path: '/profissionais', label: 'Profissionais', icon: 'UsersRound' },
+  { path: '/produtos', label: 'Produtos & Estoque', icon: 'PackageSearch' },
+  { path: '/planos', label: 'Planos & Mensalidades', icon: 'BadgeDollarSign' },
+  { path: '/financeiro', label: 'Financeiro', icon: 'ChartNoAxesCombined' },
+  { path: '/comunicacao', label: 'Disparos de Mensagens', icon: 'Send' },
+  { path: '/configuracoes', label: 'Configurações', icon: 'SlidersHorizontal' },
 ];
 
 export function getNavItemsForRole(role: Role | null, permissions?: string[]): NavItem[] {

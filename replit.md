@@ -1,4 +1,4 @@
-# Barber Manager
+# Beauty Manager
 
 Sistema brasileiro de gestão para barbearias, salões de beleza e prótese capilar.
 

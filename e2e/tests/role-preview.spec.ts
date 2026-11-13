@@ -67,6 +67,38 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
         });
         return;
       }
+      if (path === 'rpc/get_reception_daily_operations') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            attendances: 0,
+            planUses: 0,
+            incomeByMethod: {},
+            incomeTotal: 0,
+            incomeWithoutMethod: 0,
+            expenseByMethod: {},
+            expenseTotal: 0,
+            planReceiptsByMethod: {},
+            planReceiptTotal: 0,
+          }),
+        });
+        return;
+      }
+      if (
+        path === 'rpc/get_my_plan_usage_earnings' ||
+        path === 'rpc/get_my_manual_appointment_commissions'
+      ) {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+        return;
+      }
+      if (
+        path === 'rpc/list_professional_account_emails' ||
+        path === 'rpc/list_organization_join_request_candidates'
+      ) {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+        return;
+      }
       writes.push(`${request.method()} /rest/v1/${path}`);
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
       return;
@@ -86,7 +118,7 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
         professional_id: null,
       };
     } else if (table === 'organization_settings') {
-      body = { payload: { name: 'Barber Manager', roles } };
+      body = { payload: { name: 'Beauty Manager', roles } };
     } else if (table === 'professionals') {
       body = [{
         id: 'professional-preview-barber',
@@ -101,6 +133,7 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
 
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/login');
   await page.getByLabel('E-mail').fill(user.email);
   await page.getByLabel('Senha').fill('e2e-role-preview');
@@ -109,11 +142,39 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
   await expect(roleSelector).toBeVisible();
   const signedInIdentity = page.locator('header a[aria-label="Abrir meu perfil"] span');
   await expect(signedInIdentity).toHaveText('Gestor E2E');
+  const mobileNavigation = page.getByRole('navigation', { name: 'Navegação principal' });
+  await expect(page.getByTestId('dashboard-quick-attendance')).toBeVisible();
+  await expect(page.getByTestId('dashboard-quick-agenda')).toBeVisible();
+  await expect(mobileNavigation.getByRole('link')).toHaveCount(4);
+  for (const [path, description] of [
+    ['/agenda', 'Veja os horários do dia e acompanhe o andamento dos atendimentos.'],
+    ['/clientes', 'Busque por nome, e-mail ou WhatsApp e consulte o histórico de visitas.'],
+  ]) {
+    await page.evaluate(`window.history.pushState(null, '', '${path}'); window.dispatchEvent(new PopStateEvent('popstate'))`);
+    await expect(page.getByText(description, { exact: true })).toBeVisible();
+  }
+  await page.evaluate("window.history.pushState(null, '', '/planos'); window.dispatchEvent(new PopStateEvent('popstate'))");
+  await page.getByRole('button', { name: 'Ver explicação de Planos disponíveis', exact: true }).click();
+  await expect(
+    page.getByText('Crie planos, vincule assinantes e acompanhe usos, renovações e pagamentos.', { exact: true }),
+  ).toBeVisible();
 
   await roleSelector.selectOption('barbeiro');
   await expect(page.getByText(/Visualizando como Barbeiro/)).toBeVisible();
   await expect(signedInIdentity).toHaveText('Gestor E2E');
   await expect(page.getByRole('link', { name: 'Financeiro' })).toBeVisible();
+  await expect(mobileNavigation.getByTestId('mobile-nav-link-financeiro')).toBeVisible();
+  await expect(mobileNavigation.getByRole('link')).toHaveCount(4);
+  await page.getByTestId('button-mobile-nav-more').click();
+  const mobileMenu = page.getByRole('dialog', { name: 'Menu de navegação' });
+  await expect(mobileMenu.getByRole('heading', { name: 'Atendimento' })).toBeVisible();
+  await expect(mobileMenu.getByRole('heading', { name: 'Gestão' })).toBeVisible();
+  await expect(mobileMenu.getByRole('link', { name: 'Financeiro' })).toBeVisible();
+  await page.getByRole('button', { name: 'Fechar menu' }).click();
+  await page.evaluate("window.history.pushState(null, '', '/controle'); window.dispatchEvent(new PopStateEvent('popstate'))");
+  await expect(page.getByRole('heading', { name: 'Cliente' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Plano, serviço e profissional' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Valores, produtos e pagamento' })).toBeVisible();
   await page.evaluate("window.history.pushState(null, '', '/financeiro'); window.dispatchEvent(new PopStateEvent('popstate'))");
   await expect(page.getByRole('heading', { name: 'Ganhos de Barbeiro' })).toBeVisible();
   await expect(page.getByText('Comissão por execução · Barbearia')).toBeVisible();
@@ -164,6 +225,7 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
   await expect(page.getByText('Não é possível realizar alterações durante a visualização por cargo.')).toBeVisible();
   expect(writes).toEqual([]);
 
+  await page.setViewportSize({ width: 1280, height: 900 });
   await roleSelector.selectOption('');
   await expect(page.getByText(/Visualizando como/)).toHaveCount(0);
   await expect(signedInIdentity).toHaveText('Gestor E2E');
@@ -171,12 +233,77 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
   await page.evaluate("window.history.pushState(null, '', '/configuracoes/acesso'); window.dispatchEvent(new PopStateEvent('popstate'))");
   await expect(page.getByRole('heading', { name: 'Papéis e Acesso' })).toBeVisible();
 
+  await roleSelector.selectOption('recepcao');
+  await page.getByRole('link', { name: 'Controle Diário', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Lançar Despesa' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Registrar Despesa', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Financeiro', exact: true })).toHaveCount(0);
+  await roleSelector.selectOption('');
+
   await roleSelector.selectOption('barbeiro');
-  await page.getByRole('button', { name: 'Sair do sistema' }).first().click();
+  await page.getByTestId('button-logout').click();
   await expect(page).toHaveURL(/\/login/);
   await page.getByLabel('E-mail').fill(user.email);
   await page.getByLabel('Senha').fill('e2e-role-preview');
   await page.getByRole('button', { name: 'Entrar', exact: true }).click();
   await expect(roleSelector).toHaveValue('');
   await expect(signedInIdentity).toHaveText('Gestor E2E');
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const pageAnimationDuration = await page.locator('.page-fade-in').evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).animationDuration);
+  const buttonTransitionDuration = await page.getByTestId('dashboard-quick-attendance')
+    .evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).transitionDuration);
+  expect(Number.parseFloat(pageAnimationDuration)).toBeLessThanOrEqual(0.001);
+  expect(Number.parseFloat(buttonTransitionDuration)).toBeLessThanOrEqual(0.001);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await roleSelector.selectOption('gestor');
+  const bodyOverflowBeforeMenu = await page.locator('body').evaluate(element => element.style.overflow);
+  const openMoreOptions = page.getByRole('button', { name: 'Abrir mais opções', exact: true });
+  await openMoreOptions.click();
+  const mobileMenuPanel = page.locator('.bm-mobile-drawer-panel');
+  await expect(mobileMenuPanel).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Menu de navegação' })).toBeVisible();
+  expect(Number.parseFloat(await mobileMenuPanel.evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).animationDuration))).toBeLessThanOrEqual(0.001);
+  await expect.poll(() => page.locator('body').evaluate(element => element.style.overflow)).toBe('hidden');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Menu de navegação' })).toBeHidden();
+  await expect(openMoreOptions).toBeFocused();
+  await expect.poll(() => page.locator('body').evaluate(element => element.style.overflow)).toBe(bodyOverflowBeforeMenu);
+
+  await openMoreOptions.click();
+  const reopenedMobileMenu = page.getByRole('dialog', { name: 'Menu de navegação' });
+  await reopenedMobileMenu.locator('a[href="/profissionais"]').click();
+  await expect(page).toHaveURL(/\/profissionais$/);
+  await expect(reopenedMobileMenu).toBeHidden();
+  await expect.poll(() => page.locator('body').evaluate(element => element.style.overflow)).toBe(bodyOverflowBeforeMenu);
+  await roleSelector.selectOption('');
+  await page.evaluate("window.history.pushState(null, '', '/profissionais'); window.dispatchEvent(new PopStateEvent('popstate'))");
+  await expect(page.getByRole('button', { name: 'Adicionar Profissional', exact: true })).toBeVisible();
+
+  const addProfessional = page.getByRole('button', { name: 'Adicionar Profissional', exact: true });
+  await addProfessional.click();
+  const professionalDialog = page.getByRole('dialog');
+  await expect(professionalDialog).toBeVisible();
+  expect(Number.parseFloat(await professionalDialog.evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).animationDuration))).toBeLessThanOrEqual(0.001);
+  const dialogName = professionalDialog.getByTestId('input-professional-name');
+  await dialogName.fill('Profissional temporário E2E');
+  const professionalRole = professionalDialog.getByTestId('select-professional-role');
+  await professionalRole.selectOption('manicure');
+  await expect(professionalRole).toHaveValue('manicure');
+  expect(await professionalDialog.evaluate(element => element.contains(element.ownerDocument.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(professionalDialog).toBeHidden();
+  await expect(addProfessional).toBeFocused();
+
+  const deleteProfessional = page.getByRole('button', { name: 'Excluir Barbeiro E2E', exact: true });
+  await deleteProfessional.click();
+  const deleteAlert = page.getByRole('alertdialog');
+  await expect(deleteAlert).toBeVisible();
+  expect(Number.parseFloat(await deleteAlert.evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).animationDuration))).toBeLessThanOrEqual(0.001);
+  expect(await deleteAlert.evaluate(element => element.contains(element.ownerDocument.activeElement))).toBe(true);
+  await deleteAlert.getByRole('button', { name: 'Cancelar', exact: true }).click();
+  await expect(deleteAlert).toBeHidden();
+  await expect(deleteProfessional).toBeFocused();
+  expect(writes).toEqual([]);
 });

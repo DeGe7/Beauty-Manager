@@ -1,18 +1,35 @@
 import { useRef, useState } from 'react';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { useAuth } from '@/auth/auth';
 import { getRoleLabel } from '@/auth/types';
 import { Camera, UserCircle, Upload, Save, X, Pencil, LockKeyhole } from 'lucide-react';
 import { toast } from 'sonner';
+import { useTemporaryFormState } from '@/data/form-drafts';
 
 export default function Perfil() {
   const { profile: session, setAvatar, setName, updatePassword } = useAuth();
   const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState(session?.avatar || '');
-  const [draftAvatar, setDraftAvatar] = useState(session?.avatar || '');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [draftName, setDraftName] = useState(session?.name || '');
-  const [isEditingName, setIsEditingName] = useState(false);
+  const [photoDraft, setPhotoDraft, clearPhotoDraft] = useTemporaryFormState(
+    'profile-photo-editor',
+    'perfil',
+    { draftAvatar: '', selectedFile: null as File | null, isEditing: false },
+  );
+  const { draftAvatar, selectedFile, isEditing } = photoDraft;
+  const setDraftAvatar = (draftAvatar: string) => setPhotoDraft(current => ({ ...current, draftAvatar }));
+  const setSelectedFile = (selectedFile: File | null) => setPhotoDraft(current => ({ ...current, selectedFile }));
+  const setIsEditing = (isEditing: boolean) => setPhotoDraft(current => ({ ...current, isEditing }));
+  const [isSavingPhoto, setIsSavingPhoto] = useState(false);
+  const [photoFeedback, setPhotoFeedback] = useState<{ kind: 'status' | 'error'; message: string } | null>(null);
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState('');
+  const [nameDraft, setNameDraft, clearNameDraft] = useTemporaryFormState(
+    'profile-name-editor',
+    'perfil',
+    { name: '', isEditing: false },
+  );
+  const { name: draftName, isEditing: isEditingName } = nameDraft;
+  const setDraftName = (name: string) => setNameDraft(current => ({ ...current, name }));
+  const setIsEditingName = (isEditing: boolean) => setNameDraft(current => ({ ...current, isEditing }));
   const [newPassword, setNewPassword] = useState('');
   const [passwordConfirmation, setPasswordConfirmation] = useState('');
   const [isSavingPassword, setIsSavingPassword] = useState(false);
@@ -22,40 +39,62 @@ export default function Perfil() {
   const handlePhoto = (file?: File) => {
     if (!file) return;
     if (!file.type.startsWith('image/')) {
+      setPhotoFeedback({ kind: 'error', message: 'Selecione um arquivo de imagem válido.' });
       toast.error('Selecione uma imagem válida.');
       return;
     }
     if (file.size > 2 * 1024 * 1024) {
+      setPhotoFeedback({ kind: 'error', message: 'A imagem deve ter no máximo 2 MB.' });
       toast.error('A imagem deve ter no máximo 2 MB.');
       return;
     }
+    setPhotoFeedback({ kind: 'status', message: 'Carregando imagem...' });
+    setFailedAvatarUrl('');
     const reader = new FileReader();
     reader.onload = () => {
       const avatar = String(reader.result);
       setDraftAvatar(avatar);
       setSelectedFile(file);
       setIsEditing(true);
+      setPhotoFeedback({ kind: 'status', message: 'Imagem pronta para salvar.' });
+    };
+    reader.onerror = () => {
+      setPhotoFeedback({ kind: 'error', message: 'Não foi possível ler este arquivo de imagem.' });
+      toast.error('Não foi possível ler este arquivo de imagem.');
     };
     reader.readAsDataURL(file);
   };
 
   const savePhoto = async () => {
-    if (!selectedFile) return;
+    if (isSavingPhoto) return;
+    if (!selectedFile) {
+      setPhotoFeedback({ kind: 'error', message: 'Selecione uma imagem antes de salvar.' });
+      return;
+    }
+    setIsSavingPhoto(true);
+    setPhotoFeedback({ kind: 'status', message: 'Salvando foto no perfil...' });
     try {
-      await setAvatar(selectedFile);
-      setPreview(draftAvatar);
-      setIsEditing(false);
-      setSelectedFile(null);
+      const savedAvatarUrl = await setAvatar(selectedFile);
+      setPreview(savedAvatarUrl);
+      setDraftAvatar(savedAvatarUrl);
+      setFailedAvatarUrl('');
+      clearPhotoDraft();
+      if (inputRef.current) inputRef.current.value = '';
+      setPhotoFeedback({ kind: 'status', message: 'Foto de perfil atualizada.' });
       toast.success('Foto de perfil atualizada.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Não foi possível salvar a foto.');
+      const message = error instanceof Error ? error.message : 'Não foi possível salvar a foto.';
+      setPhotoFeedback({ kind: 'error', message });
+      toast.error(message);
+    } finally {
+      setIsSavingPhoto(false);
     }
   };
 
   const cancelPhoto = () => {
-    setDraftAvatar(preview);
-    setSelectedFile(null);
-    setIsEditing(false);
+    clearPhotoDraft();
+    setPhotoFeedback(null);
+    setFailedAvatarUrl('');
     if (inputRef.current) inputRef.current.value = '';
   };
 
@@ -67,8 +106,7 @@ export default function Perfil() {
     }
     try {
       await setName(trimmedName);
-      setDraftName(trimmedName);
-      setIsEditingName(false);
+      clearNameDraft();
       toast.success('Nome atualizado.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Não foi possível atualizar o nome.');
@@ -76,8 +114,7 @@ export default function Perfil() {
   };
 
   const cancelName = () => {
-    setDraftName(session.name);
-    setIsEditingName(false);
+    clearNameDraft();
   };
 
   const savePassword = async (event: React.FormEvent) => {
@@ -105,25 +142,41 @@ export default function Perfil() {
   };
 
   return (
-    <div className="p-5 md:p-8 max-w-3xl mx-auto space-y-6">
-      <div className="flex items-center gap-4 border-b border-brand-border pb-6">
+    <div className="p-4 sm:p-5 md:p-8 max-w-3xl mx-auto space-y-5 md:space-y-6">
+      <div className="flex items-center gap-3 border-b border-brand-border pb-4 sm:gap-4 sm:pb-6">
         <div className="p-3 rounded-xl bg-brand-surface border border-brand-border text-brand-gold"><UserCircle className="w-6 h-6" /></div>
         <div>
-          <h2 className="text-2xl font-bold">Meu Perfil</h2>
-          <p className="text-sm text-muted-foreground mt-1">Gerencie suas informações pessoais e sua foto.</p>
+          <div className="flex items-center gap-1">
+            <h2 className="text-2xl font-bold">Meu Perfil</h2>
+            <FeatureInfo label="Meu perfil">Edite seu nome, foto e senha da conta.</FeatureInfo>
+          </div>
         </div>
       </div>
 
-      <section className="bg-brand-surface border border-brand-border rounded-2xl p-6 md:p-8">
+      <section className="bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 md:p-8">
         <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
           <div className="relative">
             <div className="w-32 h-32 rounded-full bg-brand-bg border-2 border-brand-gold/50 flex items-center justify-center overflow-hidden text-4xl font-bold text-brand-gold">
-              {draftAvatar ? <img src={draftAvatar} alt={`Foto de ${session.name}`} className="w-full h-full object-cover" /> : session.name.charAt(0).toUpperCase()}
+              {(draftAvatar || preview || session.avatar) !== failedAvatarUrl && (draftAvatar || preview || session.avatar)
+                ? <img
+                    src={draftAvatar || preview || session.avatar}
+                    alt={`Foto de ${session.name}`}
+                    className="w-full h-full object-cover"
+                    onError={event => {
+                      const failedUrl = event.currentTarget.getAttribute('src') || '';
+                      setFailedAvatarUrl(failedUrl);
+                      setPhotoFeedback({
+                        kind: 'error',
+                        message: 'A imagem não carregou. Verifique o formato do arquivo ou tente outra foto.',
+                      });
+                    }}
+                  />
+                : session.name.charAt(0).toUpperCase()}
             </div>
             <button type="button" onClick={() => inputRef.current?.click()} aria-label="Alterar foto de perfil" className="absolute bottom-0 right-0 p-2 rounded-full bg-brand-gold text-brand-bg hover:bg-brand-gold/90">
               <Camera className="w-4 h-4" />
             </button>
-            <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={event => handlePhoto(event.target.files?.[0])} />
+            <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={event => handlePhoto(event.target.files?.[0])} />
           </div>
           <div className="flex-1 text-center sm:text-left">
             {isEditingName ? (
@@ -145,7 +198,7 @@ export default function Perfil() {
             ) : (
               <div className="flex items-center gap-2 justify-center sm:justify-start">
                 <h3 className="text-xl font-bold">{session.name}</h3>
-                <button type="button" onClick={() => setIsEditingName(true)} aria-label="Editar nome" title="Editar nome" className="p-1.5 rounded-md text-muted-foreground hover:text-brand-gold hover:bg-brand-gold/10">
+                <button type="button" onClick={() => setNameDraft({ name: session.name, isEditing: true })} aria-label="Editar nome" title="Editar nome" className="p-1.5 rounded-md text-muted-foreground hover:text-brand-gold hover:bg-brand-gold/10">
                   <Pencil className="w-4 h-4" />
                 </button>
               </div>
@@ -155,27 +208,39 @@ export default function Perfil() {
             <button type="button" onClick={() => inputRef.current?.click()} className="mt-5 flex items-center gap-2 mx-auto sm:mx-0 px-4 py-2 rounded-lg border border-brand-border text-sm font-semibold hover:border-brand-gold hover:text-brand-gold transition-colors">
               <Upload className="w-4 h-4" /> Alterar foto
             </button>
-            <p className="text-xs text-muted-foreground mt-2">PNG, JPG ou WEBP · máximo de 2 MB</p>
+            <p className="text-xs text-muted-foreground mt-2">Todos os formatos de imagem, incluindo GIF · máximo de 2 MB</p>
             {isEditing && (
               <div className="flex flex-wrap gap-2 mt-5 justify-center sm:justify-start">
-                <button type="button" onClick={savePhoto} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-gold text-brand-bg text-sm font-bold hover:bg-brand-gold/90">
-                  <Save className="w-4 h-4" /> Salvar alterações
+                <button type="button" onClick={savePhoto} disabled={isSavingPhoto} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-gold text-brand-bg text-sm font-bold hover:bg-brand-gold/90 disabled:cursor-wait disabled:opacity-70">
+                  <Save className="w-4 h-4" /> {isSavingPhoto ? 'Salvando...' : 'Salvar alterações'}
                 </button>
-                <button type="button" onClick={cancelPhoto} className="flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-border text-sm font-semibold hover:border-brand-gold hover:text-brand-gold transition-colors">
+                <button type="button" onClick={cancelPhoto} disabled={isSavingPhoto} className="flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-border text-sm font-semibold hover:border-brand-gold hover:text-brand-gold transition-colors disabled:cursor-wait disabled:opacity-70">
                   <X className="w-4 h-4" /> Cancelar
                 </button>
               </div>
+            )}
+            {photoFeedback && (
+              <p
+                data-testid="photo-save-feedback"
+                role={photoFeedback.kind === 'error' ? 'alert' : 'status'}
+                aria-live="polite"
+                className={`mt-3 text-sm ${photoFeedback.kind === 'error' ? 'text-red-400' : 'text-brand-gold'}`}
+              >
+                {photoFeedback.message}
+              </p>
             )}
           </div>
         </div>
       </section>
 
-      <section className="bg-brand-surface border border-brand-border rounded-2xl p-6 md:p-8">
+      <section className="bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 md:p-8">
         <div className="flex items-center gap-3 border-b border-brand-border/50 pb-4">
           <LockKeyhole className="w-5 h-5 text-brand-gold" />
           <div>
-            <h3 className="text-lg font-bold text-foreground">Segurança da conta</h3>
-            <p className="text-sm text-muted-foreground mt-1">Atualize sua senha sempre que precisar.</p>
+            <div className="flex items-center gap-1">
+              <h3 className="text-lg font-bold text-foreground">Segurança da conta</h3>
+              <FeatureInfo label="Segurança da conta">Atualize sua senha sempre que precisar.</FeatureInfo>
+            </div>
           </div>
         </div>
 

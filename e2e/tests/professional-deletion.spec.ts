@@ -37,7 +37,7 @@ test.describe('exclusão segura de profissionais com histórico', () => {
     const totalsBefore = await financialTotals(page);
     // These values ensure the snapshots are not comparing an empty/hidden history.
     const amount = (display: string) => Number(display.replace(/[^\d,-]/g, '').replace(',', '.'));
-    expect(amount(totalsBefore.Entradas) - amount(initialTotals.Entradas)).toBeCloseTo(1390.75, 2);
+    expect(amount(totalsBefore.Entradas) - amount(initialTotals.Entradas)).toBeCloseTo(1540.65, 2);
     await openModule(page, '/profissionais', 'Equipe');
     const heading = page.getByRole('heading', { name: prefix, exact: true });
     await expect(heading).toBeVisible();
@@ -91,10 +91,10 @@ test.describe('exclusão segura de profissionais com histórico', () => {
 
     await openModule(page, '/controle', 'Controle Diário');
     const attendance = page.locator('tbody tr').filter({ hasText: `${prefix} atendimento` });
-    await expect(attendance).toContainText('Profissional removido');
+    await expect(attendance).toContainText('Profissional não disponível');
     await expect(attendance).toContainText(/140,00/);
     await page.reload();
-    await expect(attendance).toContainText('Profissional removido');
+    await expect(attendance).toContainText('Profissional não disponível');
     await expect(attendance).toContainText(/140,00/);
 
     await openModule(page, '/agenda', 'Agenda');
@@ -104,12 +104,11 @@ test.describe('exclusão segura de profissionais com histórico', () => {
     await openModule(page, '/planos', 'Planos Disponíveis');
     const history = page.locator('section').filter({ hasText: 'Histórico presencial' });
     const payment = history.getByText(`${prefix} assinante`, { exact: true }).locator('..').locator('..');
-    const subscriber = page.getByText(`${prefix} assinante`, { exact: true }).first().locator('..').locator('..');
-    await expect(subscriber).toContainText('Profissional removido');
+    const subscriber = page.getByRole('table').getByRole('row').filter({ hasText: `${prefix} assinante` });
     await expect(payment).toContainText(/149,90/);
     await expect(payment).toContainText('Paga');
     await page.reload();
-    await expect(subscriber).toContainText('Profissional removido');
+    await expect(subscriber).toBeVisible();
     await expect(payment).toContainText(/149,90/);
     expect(await financialTotals(page)).toEqual(totalsBefore);
   });

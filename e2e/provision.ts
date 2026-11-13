@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { offsetSaoPauloDateKey } from './date-helpers.ts';
 
 export interface Credentials {
   email: string;
@@ -52,6 +53,14 @@ export interface E2EScenarioSnapshot {
   startedAt: string;
 }
 
+export interface E2ECashCalculationFixtures {
+  organizationId: string;
+  date: string;
+  incomeIds: string[];
+  planId: string;
+  subscriberId: string;
+}
+
 interface ProvisionConfig {
   url: string;
   serviceRoleKey: string;
@@ -60,16 +69,17 @@ interface ProvisionConfig {
 
 interface AuthUser {
   id: string;
+  user_metadata?: Record<string, unknown> | null;
 }
 
-const currentSchemaVersion = '2026-10-23.7';
+const currentSchemaVersion = '2026-11-13.5';
 const requiredSchemaTables = [
   ['organizations', 'id'],
   ['deployment_settings', 'setting_key,enabled'],
   ['profiles', 'id'],
   ['professionals', 'id'],
   ['organization_members', 'organization_id,granted_by,granted_by_name,granted_at'],
-  ['organization_join_requests', 'id,user_id,applicant_email,applicant_phone,status,professional_id'],
+  ['organization_join_requests', 'id,user_id,applicant_email,applicant_phone,status,professional_id,hidden_at,restored_at'],
   ['organization_invitations', 'id,phone,join_request_id,revoked_by,revoked_by_name,invited_by,invited_by_name,resend_email_id,email_delivery_status,email_delivery_updated_at'],
   ['organization_join_request_events', 'id,request_id,event_type,actor_name,metadata,created_at'],
   ['communication_sends', 'id'],
@@ -77,26 +87,27 @@ const requiredSchemaTables = [
   ['organization_settings', 'organization_id'],
   [
     'appointments',
-    'id,attendance_recorded_at,seller_professional_id,seller_is_company,service_id,plan_subscriber_id,plan_usage_value,professional_commissions',
+    'id,attendance_recorded_at,seller_professional_id,seller_is_company,service_id,service_description,plan_subscriber_id,plan_usage_value,professional_commissions',
   ],
   ['blocks', 'id'],
   ['clients', 'id,name,visits,organization_id'],
-  ['products', 'id,name,stock,min_stock,organization_id'],
+  ['products', 'id,name,price,cost,stock,min_stock,is_prosthesis_capillary,organization_id'],
+  ['product_sales', 'id,date,client_id,appointment_id,payment_method,items,total,organization_id,created_at,reversal_date,reversal_reason,reversed_at,reversed_by'],
   ['expenses', 'id'],
-  ['incomes', 'id'],
+  ['incomes', 'id,payment_method'],
   ['finance_entry_changes', 'id'],
   ['prothesis_sales', 'id'],
   ['mentoria_sessions', 'id'],
-  ['subscription_plans', 'id'],
-  ['subscribers', 'id,usage_started_at'],
+    ['subscription_plans', 'id,salon_share_percent'],
+    ['subscribers', 'id,usage_started_at,salon_share_percent_snapshot'],
   [
     'subscription_payments',
-    'id,subscriber_id,due_date,paid_at,amount,payment_method,status,note,organization_id,created_at,updated_at',
+    'id,subscriber_id,due_date,paid_at,amount,payment_method,status,note,organization_id,created_at,updated_at,salon_share_percent_snapshot',
   ],
 ] as const;
 
 const fixtureFile = resolve(
-  process.env.E2E_FIXTURE_FILE || 'test-results/e2e-fixtures.json',
+  process.env.E2E_FIXTURE_FILE || '.local/test-state/e2e-fixtures.json',
 );
 const cleanupStateFile = resolve(
   process.env.E2E_FIXTURE_STATE_FILE || `${fixtureFile}.pending`,
@@ -262,6 +273,189 @@ async function setOrganizationCreationEnabled(
   });
 }
 
+export async function setE2EOrganizationCreationEnabled(enabled: boolean): Promise<void> {
+  if (!isProvisioningEnabled()) {
+    throw new Error('E2E organization creation can only be changed in the provisioned test project.');
+  }
+  await setOrganizationCreationEnabled(getConfig(), enabled);
+}
+
+async function listAuthUsers(config: ProvisionConfig): Promise<AuthUser[]> {
+  const users: AuthUser[] = [];
+  const perPage = 1000;
+  for (let page = 1; ; page += 1) {
+    const response = await request(
+      config,
+      `/auth/v1/admin/users?page=${page}&per_page=${perPage}`,
+    );
+    if (!response || typeof response !== 'object' || !Array.isArray((response as { users?: unknown }).users)) {
+      throw new Error('Supabase returned an unexpected user list while reading E2E accounts.');
+    }
+    const pageUsers = (response as { users: unknown[] }).users;
+    for (const user of pageUsers) {
+      if (!user || typeof user !== 'object' || typeof (user as { id?: unknown }).id !== 'string') {
+        continue;
+      }
+      users.push(user as AuthUser);
+    }
+    if (pageUsers.length < perPage) break;
+  }
+  return users;
+}
+
+async function getPreservedE2EOrganizations(config: ProvisionConfig): Promise<{
+  preservedUserIds: Set<string>;
+  organizationIds: Set<string>;
+  memberships: Record<string, unknown>[];
+}> {
+  const users = await listAuthUsers(config);
+  const preservedUserIds = new Set(
+    users
+      .filter(user => user.user_metadata?.e2e_preserve_account === true)
+      .map(user => user.id),
+  );
+  const memberships = await postgrest(config, 'organization_members', undefined, {
+    method: 'GET',
+    query: '?select=organization_id,user_id,role,is_active',
+  });
+  const organizationIds = new Set(
+    memberships
+      .filter(membership => (
+        typeof membership.user_id === 'string' &&
+        preservedUserIds.has(membership.user_id) &&
+        membership.is_active !== false
+      ))
+      .map(membership => membership.organization_id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+  return { preservedUserIds, organizationIds, memberships };
+}
+
+async function createIsolatedFixtureOrganization(
+  config: ProvisionConfig,
+  runId: string,
+  manager: { credentials: Credentials; userId: string },
+  userIds: string[],
+  managerToken: string,
+  organizationIds: Set<string>,
+): Promise<string> {
+  const existingOrganizations = await postgrest(config, 'organizations', undefined, {
+    method: 'GET',
+    query: '?select=id',
+  });
+  if (existingOrganizations.length === 0) {
+    await setOrganizationCreationEnabled(config, true);
+    let response: unknown;
+    try {
+      response = await request(config, '/rest/v1/rpc/bootstrap_organization', {
+        method: 'POST',
+        body: {
+          p_name: `Organização E2E ${runId}`,
+          p_cnpj: '',
+          p_address: 'Ambiente descartável de testes',
+        },
+        authorizationToken: managerToken,
+      });
+    } finally {
+      await setOrganizationCreationEnabled(config, false);
+    }
+    const organizationId = String(response || '');
+    if (!organizationId) throw new Error('Supabase did not return the test organization id.');
+    writeCleanupState({ userIds, organizationId });
+    return organizationId;
+  }
+
+  const preserved = await getPreservedE2EOrganizations(config);
+  const protectedAdminOrganizationIds = new Set(
+    preserved.memberships
+      .filter(membership => (
+        typeof membership.user_id === 'string' &&
+        preserved.preservedUserIds.has(membership.user_id) &&
+        membership.is_active !== false &&
+        membership.role === 'dev-admin'
+      ))
+      .map(membership => membership.organization_id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+  const unprotectedOrganizations = existingOrganizations.filter(organization => (
+    typeof organization?.id !== 'string' ||
+    !protectedAdminOrganizationIds.has(organization.id) ||
+    !organizationIds.has(organization.id)
+  ));
+  if (unprotectedOrganizations.length > 0) {
+    throw new Error(
+      'The E2E project contains an organization that is not protected by the DEV/ADMIN test account. Fixture provisioning stopped without changing it.',
+    );
+  }
+
+  const organizations = await postgrest(config, 'organizations', {
+    name: `Organização E2E ${runId}`,
+    cnpj: '',
+    address: 'Ambiente descartável de testes',
+  });
+  const organizationId = organizations[0]?.id;
+  if (typeof organizationId !== 'string' || !organizationId) {
+    throw new Error('Supabase did not return the isolated E2E organization id.');
+  }
+  writeCleanupState({ userIds, organizationId });
+
+  await postgrest(config, 'organization_settings', {
+    organization_id: organizationId,
+    payload: {},
+  });
+  const managerInvitationToken = token();
+  await createInvitation(config, {
+    organizationId,
+    professionalId: null,
+    email: manager.credentials.email,
+    invitedBy: manager.userId,
+    role: 'gestor',
+    token: managerInvitationToken,
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+  await request(config, '/rest/v1/rpc/accept_organization_invitation', {
+    method: 'POST',
+    body: { p_token: managerInvitationToken },
+    authorizationToken: managerToken,
+  });
+  return organizationId;
+}
+
+async function createSecondaryFixtureOrganization(
+  config: ProvisionConfig,
+  runId: string,
+  managerUserId: string,
+): Promise<string> {
+  const organizations = await postgrest(config, 'organizations', {
+    name: `Salão secundário E2E ${runId}`,
+    cnpj: '',
+    address: 'Organização isolada para teste de troca',
+  });
+  const organizationId = organizations[0]?.id;
+  if (typeof organizationId !== 'string' || !organizationId) {
+    throw new Error('Supabase did not return the secondary test organization id.');
+  }
+  try {
+    await postgrest(config, 'organization_settings', {
+      organization_id: organizationId,
+      payload: {},
+    });
+    await postgrest(config, 'organization_members', {
+      organization_id: organizationId,
+      user_id: managerUserId,
+      role: 'gestor',
+      is_active: true,
+    });
+  } catch (error) {
+    await request(config, `/rest/v1/organizations?id=eq.${encodeURIComponent(organizationId)}`, {
+      method: 'DELETE',
+      headers: { Prefer: 'return=minimal' },
+    }).catch(() => undefined);
+    throw error;
+  }
+  return organizationId;
+}
+
 export async function clearE2EProjectData(): Promise<{
   organizationsDeleted: number;
   authUsersDeleted: number;
@@ -277,13 +471,26 @@ export async function clearE2EProjectData(): Promise<{
   await assertCurrentSchema(config);
   await setOrganizationCreationEnabled(config, false);
 
+  const preserved = await getPreservedE2EOrganizations(config);
+  for (const membership of preserved.memberships) {
+    if (
+      typeof membership.organization_id === 'string' &&
+      preserved.organizationIds.has(membership.organization_id) &&
+      typeof membership.user_id === 'string'
+    ) {
+      preserved.preservedUserIds.add(membership.user_id);
+    }
+  }
+
   const organizations = await postgrest(config, 'organizations', undefined, {
     method: 'GET',
     query: '?select=id',
   });
   const organizationIds = organizations
     .map(row => row.id)
-    .filter((id): id is string => typeof id === 'string');
+    .filter((id): id is string => (
+      typeof id === 'string' && !preserved.organizationIds.has(id)
+    ));
   for (const id of organizationIds) {
     await request(config, `/rest/v1/organizations?id=eq.${encodeURIComponent(id)}`, {
       method: 'DELETE',
@@ -291,24 +498,9 @@ export async function clearE2EProjectData(): Promise<{
     });
   }
 
-  const userIds: string[] = [];
-  const perPage = 1000;
-  for (let page = 1; ; page += 1) {
-    const response = await request(
-      config,
-      `/auth/v1/admin/users?page=${page}&per_page=${perPage}`,
-    );
-    if (!response || typeof response !== 'object' || !Array.isArray((response as { users?: unknown }).users)) {
-      throw new Error('Supabase returned an unexpected user list while clearing E2E data.');
-    }
-    const users = (response as { users: unknown[] }).users;
-    userIds.push(...users.flatMap(user =>
-      user && typeof user === 'object' && typeof (user as { id?: unknown }).id === 'string'
-        ? [(user as { id: string }).id]
-        : [],
-    ));
-    if (users.length < perPage) break;
-  }
+  const userIds = (await listAuthUsers(config))
+    .map(user => user.id)
+    .filter(id => !preserved.preservedUserIds.has(id));
   for (const id of userIds) {
     await request(config, `/auth/v1/admin/users/${encodeURIComponent(id)}`, {
       method: 'DELETE',
@@ -321,6 +513,7 @@ export async function clearE2EProjectData(): Promise<{
   });
   for (const profile of remainingProfiles) {
     if (typeof profile.id !== 'string') continue;
+    if (preserved.preservedUserIds.has(profile.id)) continue;
     await request(config, `/rest/v1/profiles?id=eq.${encodeURIComponent(profile.id)}`, {
       method: 'DELETE',
       headers: { Prefer: 'return=minimal' },
@@ -329,10 +522,15 @@ export async function clearE2EProjectData(): Promise<{
 
   const remainingOrganizations = await postgrest(config, 'organizations', undefined, {
     method: 'GET',
-    query: '?select=id&limit=1',
+    query: '?select=id',
   });
-  if (remainingOrganizations.length) {
-    throw new Error('The E2E test reset did not remove every organization.');
+  const unexpectedOrganizations = remainingOrganizations
+    .map(row => row.id)
+    .filter((id): id is string => (
+      typeof id === 'string' && !preserved.organizationIds.has(id)
+    ));
+  if (unexpectedOrganizations.length) {
+    throw new Error('The E2E test reset left an unprotected organization behind.');
   }
   await setOrganizationCreationEnabled(config, false);
   removeFixtureFiles();
@@ -402,18 +600,14 @@ function email(role: string, id: string) {
 }
 
 function dateKey(offsetDays = 0) {
-  const date = new Date();
-  date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() + offsetDays);
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return offsetSaoPauloDateKey(offsetDays);
 }
 
 async function createInvitation(
   config: ProvisionConfig,
   input: {
     organizationId: string;
-    professionalId: string;
+    professionalId: string | null;
     email: string;
     invitedBy: string;
     role?: string;
@@ -491,7 +685,7 @@ export async function provisionFixtures(): Promise<void> {
       ['operational', 'Profissional operacional E2E'],
       ['reception', 'Recepção E2E'],
       ['customRole', 'Profissional papel customizado E2E'],
-      ['invited', 'Convidado E2E'],
+      ['invited', 'Profissional convidado E2E'],
       ['onboarding', 'Onboarding E2E'],
       ['expired', 'Conta convite expirado E2E'],
       ['revoked', 'Conta convite revogado E2E'],
@@ -519,23 +713,16 @@ export async function provisionFixtures(): Promise<void> {
     >;
 
     const managerToken = await signInUser(config, createdAccounts.manager.credentials);
-    await setOrganizationCreationEnabled(config, true);
-    let organizationResponse: unknown;
-    try {
-      organizationResponse = await request(config, '/rest/v1/rpc/bootstrap_organization', {
-        method: 'POST',
-        body: {
-          p_name: `Organização E2E ${id}`,
-          p_cnpj: '',
-          p_address: 'Ambiente descartável de testes',
-        },
-        authorizationToken: managerToken,
-      });
-    } finally {
-      await setOrganizationCreationEnabled(config, false);
-    }
-    organizationId = String(organizationResponse || '');
-    if (!organizationId) throw new Error('Supabase did not return the test organization id.');
+    const preserved = await getPreservedE2EOrganizations(config);
+    organizationId = await createIsolatedFixtureOrganization(
+      config,
+      id,
+      createdAccounts.manager,
+      userIds,
+      managerToken,
+      preserved.organizationIds,
+    );
+    await createSecondaryFixtureOrganization(config, id, createdAccounts.manager.userId);
     writeCleanupState({ userIds, organizationId });
     await pauseAfterCheckpoint('organization');
 
@@ -557,6 +744,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'barbeiro',
         initials: 'PO',
         color: '#3b82f6',
+        commissions: { barbearia: 0.5 },
         organization_id: organizationId,
       },
       {
@@ -564,6 +752,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'e2e-custom',
         initials: 'PC',
         color: '#8b5cf6',
+        commissions: { barbearia: 0 },
         organization_id: organizationId,
       },
       {
@@ -571,6 +760,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'barbeiro',
         initials: 'PE',
         color: '#10b981',
+        commissions: { barbearia: 0.5 },
         organization_id: organizationId,
       },
       {
@@ -578,6 +768,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'barbeiro',
         initials: 'PP',
         color: '#f59e0b',
+        commissions: { barbearia: 0 },
         organization_id: organizationId,
       },
       {
@@ -585,6 +776,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'barbeiro',
         initials: 'PX',
         color: '#ef4444',
+        commissions: { barbearia: 0 },
         organization_id: organizationId,
       },
       {
@@ -592,6 +784,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'barbeiro',
         initials: 'PR',
         color: '#64748b',
+        commissions: { barbearia: 0 },
         organization_id: organizationId,
       },
       {
@@ -599,6 +792,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'vendedor',
         initials: 'PE',
         color: '#14b8a6',
+        commissions: { barbearia: 0 },
         organization_id: organizationId,
       },
       {
@@ -606,6 +800,7 @@ export async function provisionFixtures(): Promise<void> {
         role: 'barbeiro',
         initials: 'PA',
         color: '#f97316',
+        commissions: { barbearia: 0 },
         organization_id: organizationId,
       },
     ], { authorizationToken: managerToken });
@@ -766,7 +961,7 @@ export async function provisionFixtures(): Promise<void> {
         date: dateKey(),
         time: '10:00',
         client: `Cliente faturamento hoje 2 ${id}`,
-        professional_id: professionalIds[1],
+        professional_id: professionalIds[2],
         service: 'Barbearia',
         duration: 30,
         status: 'completed',
@@ -798,7 +993,7 @@ export async function provisionFixtures(): Promise<void> {
         date: dateKey(-10),
         time: '12:00',
         client: `Cliente faturamento mensal ${id}`,
-        professional_id: professionalIds[1],
+        professional_id: professionalIds[2],
         service: 'Barbearia',
         duration: 30,
         status: 'completed',
@@ -809,8 +1004,24 @@ export async function provisionFixtures(): Promise<void> {
         payment_splits: [],
         organization_id: organizationId,
       },
+      {
+        id: `e2e-revenue-prosthesis-${id}`,
+        date: dateKey(-3),
+        time: '13:00',
+        client: `Cliente prótese financeira ${id}`,
+        professional_id: professionalIds[0],
+        service: 'Prótese Capilar',
+        duration: 60,
+        status: 'completed',
+        value: 300,
+        tip: 0,
+        products: [],
+        pay_method: 'pix',
+        payment_splits: [],
+        organization_id: organizationId,
+      },
     ], { authorizationToken: managerToken });
-    if (revenueAppointments.length !== 4) {
+    if (revenueAppointments.length !== 5) {
       throw new Error(`Supabase did not create all E2E revenue appointments (created ${revenueAppointments.length}).`);
     }
 
@@ -854,6 +1065,37 @@ export function readFixtureManifest(): E2EFixtureManifest | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function getFixtureOrganizationId(): string | undefined {
+  return readFixtureManifest()?.organizationId;
+}
+
+export async function createE2EJoinRequest(input: {
+  applicantName: string;
+  applicantEmail: string;
+}): Promise<Record<string, unknown>> {
+  if (!isProvisioningEnabled()) {
+    throw new Error('E2E join-request fixtures require E2E_PROVISION=true.');
+  }
+
+  const manifest = readFixtureManifest();
+  if (!manifest?.organizationId) {
+    throw new Error('The disposable E2E organization is unavailable.');
+  }
+
+  const [requestRow] = await postgrest(getConfig(), 'organization_join_requests', {
+    organization_id: manifest.organizationId,
+    user_id: null,
+    applicant_name: input.applicantName,
+    applicant_email: input.applicantEmail.trim().toLowerCase(),
+    applicant_phone: null,
+    status: 'pending',
+  });
+  if (!requestRow?.id) {
+    throw new Error('Could not create the E2E access request.');
+  }
+  return requestRow;
 }
 
 export async function cleanupFixtures(
@@ -972,10 +1214,12 @@ export async function cleanupFixtures(
 const scenarioCleanupTables = [
   { name: 'subscription_payments', timestampColumn: 'created_at' },
   { name: 'finance_entry_changes', timestampColumn: 'changed_at' },
+  { name: 'organization_join_requests', timestampColumn: 'requested_at' },
   { name: 'organization_invitations', timestampColumn: 'created_at' },
   { name: 'organization_members', timestampColumn: 'created_at' },
   { name: 'communication_sends', timestampColumn: 'created_at' },
   { name: 'appointments', timestampColumn: 'created_at' },
+  { name: 'product_sales', timestampColumn: 'created_at' },
   { name: 'blocks', timestampColumn: 'created_at' },
   { name: 'subscribers', timestampColumn: 'created_at' },
   { name: 'expenses', timestampColumn: 'created_at' },
@@ -1100,4 +1344,161 @@ export async function professionalHistoryRequest(
   );
   if (!Array.isArray(result)) throw new Error(`Unexpected history fixture response for ${table}.`);
   return result;
+}
+
+/** Read organization settings only from the disposable, production-guarded E2E tenant. */
+export async function readScenarioOrganizationSettingsPayload(): Promise<Record<string, unknown> | null> {
+  if (!isProvisioningEnabled()) throw new Error('Organization settings fixtures require E2E_PROVISION=true.');
+  const manifest = readFixtureManifest();
+  if (!manifest) throw new Error('Disposable E2E fixture manifest not found.');
+  const config = getConfig();
+  const rows = await postgrest(config, 'organization_settings', undefined, {
+    method: 'GET',
+    query: `?organization_id=eq.${encodeURIComponent(manifest.organizationId)}&select=payload&limit=1`,
+  });
+  const payload = rows[0]?.payload;
+  return payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
+}
+
+/** Restore the full settings payload after an E2E configuration test. */
+export async function restoreScenarioOrganizationSettingsPayload(
+  payload: Record<string, unknown>,
+): Promise<void> {
+  if (!isProvisioningEnabled()) throw new Error('Organization settings fixtures require E2E_PROVISION=true.');
+  const manifest = readFixtureManifest();
+  if (!manifest) throw new Error('Disposable E2E fixture manifest not found.');
+  const config = getConfig();
+  await postgrest(config, 'organization_settings', {
+    organization_id: manifest.organizationId,
+    payload,
+  }, {
+    method: 'POST',
+    query: '?on_conflict=organization_id',
+    prefer: 'resolution=merge-duplicates,return=minimal',
+  });
+}
+
+/** Create isolated cash-calculation rows only in the guarded E2E Supabase project. */
+export async function createCashCalculationFixtures(): Promise<E2ECashCalculationFixtures> {
+  if (!isProvisioningEnabled()) {
+    throw new Error('Cash calculation fixtures require E2E_PROVISION=true.');
+  }
+  const manifest = readFixtureManifest();
+  if (!manifest) throw new Error('Disposable E2E fixture manifest not found.');
+  const config = getConfig();
+  const suffix = runId();
+  const fixtures: E2ECashCalculationFixtures = {
+    organizationId: manifest.organizationId,
+    date: dateKey(),
+    incomeIds: ['debito', 'credito', 'pix', 'dinheiro'].map(method => `e2e-cash-${method}-${suffix}`),
+    planId: `e2e-cash-plan-${suffix}`,
+    subscriberId: `e2e-cash-subscriber-${suffix}`,
+  };
+
+  try {
+    await postgrest(config, 'subscription_plans', {
+      id: fixtures.planId,
+      name: `Plano cálculo de caixa ${suffix}`,
+      price: 50,
+      services: [],
+      duration: 'Mensal',
+      organization_id: fixtures.organizationId,
+    });
+    await postgrest(config, 'subscribers', {
+      id: fixtures.subscriberId,
+      name: `Assinante cálculo de caixa ${suffix}`,
+      phone: '',
+      plan_id: fixtures.planId,
+      start_date: fixtures.date,
+      next_payment: fixtures.date,
+      status: 'ativo',
+      organization_id: fixtures.organizationId,
+    });
+    const generatedPayments = await postgrest(config, 'subscription_payments', undefined, {
+      method: 'GET',
+      query: `?organization_id=eq.${encodeURIComponent(fixtures.organizationId)}&subscriber_id=eq.${encodeURIComponent(fixtures.subscriberId)}&due_date=eq.${encodeURIComponent(fixtures.date)}&select=id&limit=2`,
+    });
+    if (generatedPayments.length !== 1 || typeof generatedPayments[0].id !== 'string') {
+      throw new Error('The E2E subscriber did not create exactly one current plan payment.');
+    }
+    const paymentId = generatedPayments[0].id;
+    await postgrest(config, 'incomes', [
+      { id: fixtures.incomeIds[0], date: fixtures.date, description: 'E2E caixa débito', amount: 10, payment_method: 'debito', organization_id: fixtures.organizationId },
+      { id: fixtures.incomeIds[1], date: fixtures.date, description: 'E2E caixa crédito', amount: 20, payment_method: 'credito', organization_id: fixtures.organizationId },
+      { id: fixtures.incomeIds[2], date: fixtures.date, description: 'E2E caixa Pix', amount: 30, payment_method: 'pix', organization_id: fixtures.organizationId },
+      { id: fixtures.incomeIds[3], date: fixtures.date, description: 'E2E caixa dinheiro', amount: 40, payment_method: 'dinheiro', organization_id: fixtures.organizationId },
+    ]);
+    const paidPayment = await postgrest(config, 'subscription_payments', {
+      paid_at: fixtures.date,
+      amount: 50,
+      payment_method: 'credito',
+      status: 'pago',
+    }, {
+      method: 'PATCH',
+      query: `?organization_id=eq.${encodeURIComponent(fixtures.organizationId)}&id=eq.${encodeURIComponent(paymentId)}`,
+    });
+    if (paidPayment.length !== 1) {
+      throw new Error('The E2E plan payment could not be updated to paid.');
+    }
+    return fixtures;
+  } catch (error) {
+    try {
+      await cleanupCashCalculationFixtures(fixtures, config);
+    } catch (cleanupError) {
+      throw new Error(
+        `Could not create E2E cash fixtures and cleanup failed: ${String(cleanupError)}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/** Remove and verify only the exact rows created for a cash-calculation test. */
+export async function cleanupCashCalculationFixtures(
+  fixtures: E2ECashCalculationFixtures,
+  config?: ProvisionConfig,
+): Promise<void> {
+  const resolvedConfig = config || getConfig();
+  const organizationId = encodeURIComponent(fixtures.organizationId);
+  const cleanupErrors: string[] = [];
+  const rows: Array<{ table: string; filter: string }> = [
+    {
+      table: 'subscription_payments',
+      filter: `subscriber_id=eq.${encodeURIComponent(fixtures.subscriberId)}`,
+    },
+    ...fixtures.incomeIds.map(id => ({ table: 'incomes', filter: `id=eq.${encodeURIComponent(id)}` })),
+    { table: 'subscribers', filter: `id=eq.${encodeURIComponent(fixtures.subscriberId)}` },
+    { table: 'subscription_plans', filter: `id=eq.${encodeURIComponent(fixtures.planId)}` },
+  ];
+
+  for (const row of rows) {
+    try {
+      await request(
+        resolvedConfig,
+        `/rest/v1/${row.table}?organization_id=eq.${organizationId}&${row.filter}`,
+        { method: 'DELETE', headers: { Prefer: 'return=minimal' } },
+      );
+    } catch (error) {
+      cleanupErrors.push(`could not delete ${row.table} fixture (${row.filter}): ${String(error)}`);
+    }
+  }
+
+  for (const row of rows) {
+    try {
+      const remaining = await postgrest(resolvedConfig, row.table, undefined, {
+        method: 'GET',
+        query: `?organization_id=eq.${organizationId}&${row.filter}&select=id&limit=1`,
+      });
+      if (remaining.length) cleanupErrors.push(`${row.table} fixture (${row.filter}) remains after cleanup`);
+    } catch (error) {
+      cleanupErrors.push(`could not verify ${row.table} fixture (${row.filter}) cleanup: ${String(error)}`);
+    }
+  }
+
+  if (cleanupErrors.length) {
+    throw new Error(`E2E cash fixture cleanup failed:\n${cleanupErrors.join('\n')}`);
+  }
 }

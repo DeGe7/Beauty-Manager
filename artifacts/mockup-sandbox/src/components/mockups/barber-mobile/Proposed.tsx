@@ -61,7 +61,7 @@ export function Proposed() {
         @keyframes bm-rise{from{transform:translateY(18px);opacity:.6}to{transform:translateY(0);opacity:1}}@media(min-width:700px){.bm-mobile{background:#11110f}.bm-wrap{padding-left:22px;padding-right:22px}.bm-content{padding-top:30px}.bm-bottom{border-radius:18px 18px 0 0}}
       `}</style>
       <header className="bm-wrap bm-head">
-        <div className="bm-brand"><div className="bm-mark"><Scissors size={19} strokeWidth={2.3}/></div><div><strong>BARBER MANAGER</strong><small>Vila Navalha</small></div></div>
+        <div className="bm-brand"><div className="bm-mark"><Scissors size={19} strokeWidth={2.3}/></div><div><strong>BEAUTY MANAGER</strong><small>Vila Navalha</small></div></div>
         <button className="bm-iconbtn" aria-label="Notificações" onClick={() => setMoreOpen(true)}><Bell size={18}/><i className="bm-notice"/></button>
       </header>
 

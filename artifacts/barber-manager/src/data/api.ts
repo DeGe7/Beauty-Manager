@@ -5,7 +5,7 @@ import type {
 } from '@workspace/api-client-react';
 import { getStorageObjectPath } from '@/services/storage';
 import { formatTimestampDateKey } from './date';
-import type { CashClosing, ExpenseCategory, PayMethod, SubscriptionPayment, SubscriptionPaymentStatus, Subscriber } from './store';
+import type { CashClosing, ExpenseCategory, PayMethod, ProductSale, SubscriptionPayment, SubscriptionPaymentStatus, Subscriber } from './store';
 import type { CashClosingFrequency } from './cash-closing';
 
 type Row = Record<string, unknown>;
@@ -147,6 +147,19 @@ export interface PersonalEarning {
   amount: number;
 }
 
+export interface ReceptionDailyOperations {
+  date: string;
+  attendances: number;
+  planUses: number;
+  incomeByMethod: Record<PayMethod, number>;
+  incomeTotal: number;
+  incomeWithoutMethod: number;
+  expenseByMethod: Record<PayMethod, number>;
+  expenseTotal: number;
+  planReceiptsByMethod: Record<PayMethod, number> & { sem_forma: number };
+  planReceiptTotal: number;
+}
+
 function client() {
   if (!supabase) {
     throw new Error('Supabase não está configurado neste ambiente.');
@@ -228,10 +241,16 @@ function translateJoinRequestError(message: string): Error {
     || normalized.includes('manual_commissions')
     || normalized.includes('primary_professional_missing_from_manual_commissions')
   ) {
+    if (normalized.includes('plan_manual_commissions_must_equal_professional_pool')) {
+      return new Error('A soma das comissões deve corresponder ao valor reservado aos profissionais neste uso do plano.');
+    }
     if (normalized.includes('manual_commissions_must_equal_service_share')) {
       return new Error('A soma das comissões dos profissionais deve corresponder a 50% do valor do serviço ou do uso do plano.');
     }
     return new Error('Revise a atribuição manual: selecione profissionais ativos, sem repetição, e informe a comissão de cada um em reais.');
+  }
+  if (normalized.includes('prosthesis_commission_amount_mismatch')) {
+    return new Error('A comissão da aplicação de prótese foi alterada. Confira o valor fixo ou o cálculo de lucro do Marcos Macedo.');
   }
   return new Error(message);
 }
@@ -267,6 +286,10 @@ function mapAppointment(row: Row) {
     serviceCommissionRateSnapshot: row.service_commission_rate_snapshot == null
       ? undefined
       : Number(row.service_commission_rate_snapshot),
+    prosthesisCostSnapshot: row.prosthesis_cost_snapshot == null
+      ? undefined
+      : Number(row.prosthesis_cost_snapshot),
+    prosthesisCommissionRuleSnapshot: Boolean(row.prosthesis_commission_rule_snapshot),
     professionalCommissions: arrayValue<Row>(row.professional_commissions)
       .map(assignment => ({
         professionalId: String(assignment.professionalId ?? assignment.professional_id ?? ''),
@@ -276,6 +299,7 @@ function mapAppointment(row: Row) {
     sellerProfessionalId: row.seller_professional_id ? String(row.seller_professional_id) : undefined,
     sellerIsCompany: Boolean(row.seller_is_company),
     service: String(row.service ?? ''),
+    serviceDescription: row.service_description ? String(row.service_description) : undefined,
     duration: Number(row.duration ?? 30),
     status: row.status,
     checkedInAt: row.checked_in_at ? String(row.checked_in_at) : undefined,
@@ -326,11 +350,40 @@ function mapProduct(row: Row) {
     id: String(row.id),
     name: String(row.name ?? ''),
     category: String(row.category ?? ''),
+    isProsthesisCapillary: Boolean(row.is_prosthesis_capillary),
     price: Number(row.price ?? 0),
     cost: Number(row.cost ?? 0),
     stock: Number(row.stock ?? 0),
     minStock: Number(row.min_stock ?? 0),
     isActive: Boolean(row.is_active),
+  };
+}
+
+function mapProductSale(row: Row): ProductSale {
+  const items = arrayValue<Row>(row.items).map(item => ({
+    productId: String(item.productId ?? item.product_id ?? ''),
+    productName: String(item.productName ?? item.product_name ?? ''),
+    unitPrice: Number(item.unitPrice ?? item.unit_price ?? 0),
+    quantity: Number(item.quantity ?? 0),
+    ...(item.discountType || item.discount_type
+      ? { discountType: String(item.discountType ?? item.discount_type) as 'amount' | 'percent' }
+      : {}),
+    discountValue: Number(item.discountValue ?? item.discount_value ?? 0),
+    discountAmount: Number(item.discountAmount ?? item.discount_amount ?? 0),
+    total: Number(item.total ?? 0),
+  }));
+  return {
+    id: String(row.id),
+    date: String(row.date ?? ''),
+    reversalDate: row.reversal_date ? String(row.reversal_date) : undefined,
+    reversalReason: row.reversal_reason ? String(row.reversal_reason) : undefined,
+    reversedAt: row.reversed_at ? String(row.reversed_at) : undefined,
+    clientId: row.client_id ? String(row.client_id) : undefined,
+    appointmentId: row.appointment_id ? String(row.appointment_id) : undefined,
+    paymentMethod: row.payment_method as PayMethod,
+    items,
+    total: Number(row.total ?? 0),
+    createdAt: String(row.created_at ?? ''),
   };
 }
 
@@ -430,6 +483,7 @@ function mapPlan(row: Row) {
     price: Number(row.price ?? 0),
     services: arrayValue<string | { serviceId: string; serviceName: string; usesPerCycle: number }>(row.services),
     duration: row.duration,
+    salonSharePercent: row.salon_share_percent == null ? null : Number(row.salon_share_percent),
   };
 }
 
@@ -444,6 +498,9 @@ function mapSubscriber(row: Row): Subscriber {
     nextPayment: String(row.next_payment ?? ''),
     status: row.status as Subscriber['status'],
     usageStartedAt: row.usage_started_at ? String(row.usage_started_at) : undefined,
+    salonSharePercentSnapshot: row.salon_share_percent_snapshot == null
+      ? null
+      : Number(row.salon_share_percent_snapshot),
   };
 }
 
@@ -457,6 +514,9 @@ function mapSubscriptionPayment(row: Row): SubscriptionPayment {
     paymentMethod: row.payment_method as SubscriptionPayment['paymentMethod'],
     status: row.status as SubscriptionPaymentStatus,
     note: row.note ? String(row.note) : undefined,
+    salonSharePercentSnapshot: row.salon_share_percent_snapshot == null
+      ? undefined
+      : Number(row.salon_share_percent_snapshot),
   };
 }
 
@@ -534,10 +594,21 @@ async function listRows(table: string, order = 'created_at'): Promise<Row[]> {
 }
 
 async function insertRow(table: string, row: Row): Promise<Row> {
-  await organizationId();
-  const { data, error } = await client().from(table).insert(defined(row)).select('*').single();
+  const currentOrganizationId = await organizationId();
+  const { data, error } = await client().from(table)
+    .insert(defined({ ...row, organization_id: currentOrganizationId }))
+    .select('*')
+    .single();
   if (error) throw new Error(`Não foi possível salvar em ${table}: ${error.message}`);
   return data as Row;
+}
+
+async function insertRowWithoutRepresentation(table: string, row: Row): Promise<Row> {
+  const currentOrganizationId = await organizationId();
+  const values = defined({ ...row, organization_id: currentOrganizationId });
+  const { error } = await client().from(table).insert(values);
+  if (error) throw new Error(`Não foi possível salvar em ${table}: ${error.message}`);
+  return values;
 }
 
 function translatePlanAttendanceError(error: unknown): Error {
@@ -605,6 +676,39 @@ async function authenticatedApiRequest<T>(
 }
 
 export const api = {
+  dashboard: {
+    getReceptionDailyOperations: async (date: string): Promise<ReceptionDailyOperations> => {
+      await organizationId();
+      const { data, error } = await client().rpc('get_reception_daily_operations', { p_date: date });
+      if (error) throw new Error(`Não foi possível carregar o resumo operacional: ${error.message}`);
+      const row = data as Row;
+      const mapMethods = (value: unknown): Record<PayMethod, number> => {
+        const methods = (value ?? {}) as Row;
+        return {
+          debito: Number(methods.debito ?? 0),
+          credito: Number(methods.credito ?? 0),
+          pix: Number(methods.pix ?? 0),
+          dinheiro: Number(methods.dinheiro ?? 0),
+        };
+      };
+      const planReceipts = (row.planReceiptsByMethod ?? {}) as Row;
+      return {
+        date: String(row.date ?? date),
+        attendances: Number(row.attendances ?? 0),
+        planUses: Number(row.planUses ?? 0),
+        incomeByMethod: mapMethods(row.incomeByMethod),
+        incomeTotal: Number(row.incomeTotal ?? 0),
+        incomeWithoutMethod: Number(row.incomeWithoutMethod ?? 0),
+        expenseByMethod: mapMethods(row.expenseByMethod),
+        expenseTotal: Number(row.expenseTotal ?? 0),
+        planReceiptsByMethod: {
+          ...mapMethods(planReceipts),
+          sem_forma: Number(planReceipts.sem_forma ?? 0),
+        },
+        planReceiptTotal: Number(row.planReceiptTotal ?? 0),
+      };
+    },
+  },
   admin: {
     provisionDevAdmin: (email: string, organizationId: string) =>
       authenticatedApiRequest<ProvisionedDevAdmin>(
@@ -798,10 +902,12 @@ export const api = {
       }));
     },
     create: async (input: {
+      organizationId: string;
       applicantName: string;
       email: string;
     }): Promise<OrganizationJoinRequest> => {
       const { data, error } = await client().rpc('request_organization_join', {
+        p_organization_id: input.organizationId,
         p_applicant_name: input.applicantName.trim(),
         p_applicant_email: input.email?.trim().toLowerCase() || null,
         p_applicant_phone: null,
@@ -816,6 +922,14 @@ export const api = {
         );
       }
       return mapOrganizationJoinRequest(data as Row);
+    },
+    publicOrganizationName: async (organizationId: string): Promise<string> => {
+      const { data, error } = await client().rpc('get_public_organization_name', {
+        p_organization_id: organizationId,
+      });
+      if (error) throw new Error(`Não foi possível identificar o salão: ${error.message}`);
+      if (!data) throw new Error('O link não identifica um salão válido.');
+      return String(data);
     },
     candidates: async (): Promise<JoinRequestCandidate[]> => {
       await organizationId();
@@ -1033,6 +1147,7 @@ export const api = {
       seller_professional_id: body.sellerProfessionalId ?? null,
       seller_is_company: body.sellerIsCompany,
       service: body.service,
+      service_description: body.serviceDescription ?? null,
       duration: body.duration,
       status: body.status,
       checked_in_at: body.checkedInAt,
@@ -1061,6 +1176,7 @@ export const api = {
         : {}),
       ...('sellerIsCompany' in body ? { seller_is_company: body.sellerIsCompany } : {}),
       service: body.service,
+      ...('serviceDescription' in body ? { service_description: body.serviceDescription ?? null } : {}),
       duration: body.duration,
       status: body.status,
       checked_in_at: body.checkedInAt,
@@ -1121,10 +1237,12 @@ export const api = {
     create: async (body: Row) => mapProduct(await insertRow('products', {
       id: body.id, name: body.name, category: body.category, price: body.price, cost: body.cost,
       stock: body.stock, min_stock: body.minStock, is_active: body.isActive,
+      is_prosthesis_capillary: body.isProsthesisCapillary,
     })),
     update: async (id: string, body: Row) => mapProduct(await updateRow('products', id, {
       name: body.name, category: body.category, price: body.price, cost: body.cost,
       stock: body.stock, min_stock: body.minStock, is_active: body.isActive,
+      is_prosthesis_capillary: body.isProsthesisCapillary,
     })),
     adjustStock: async (id: string, delta: number) => {
       await organizationId();
@@ -1137,12 +1255,42 @@ export const api = {
     },
     remove: (id: string) => removeRow('products', id),
   },
+  productSales: {
+    list: async () => (await listRows('product_sales', 'date')).map(mapProductSale),
+    create: async (body: Row) => {
+      await organizationId();
+      const { data, error } = await client().rpc('record_product_sale', {
+        p_date: body.date,
+        p_client_id: body.clientId ?? null,
+        p_appointment_id: body.appointmentId ?? null,
+        p_payment_method: body.paymentMethod,
+        p_items: body.items,
+      });
+      if (error) throw new Error(`Não foi possível registrar a venda de produtos: ${error.message}`);
+      return mapProductSale(data as Row);
+    },
+    reverse: async (id: string, reason: string) => {
+      await organizationId();
+      const { data, error } = await client().rpc('reverse_product_sale', {
+        p_sale_id: id,
+        p_reason: reason,
+      });
+      if (error) throw new Error(`Não foi possível estornar a venda de produtos: ${error.message}`);
+      return mapProductSale(data as Row);
+    },
+  },
   expenses: {
     list: async () => (await listRows('expenses', 'date')).map(mapExpense),
-    create: async (body: Row) => mapExpense(await insertRow('expenses', {
-      id: body.id, date: body.date, description: body.description, amount: body.amount, category: body.category,
-      payment_method: body.paymentMethod,
-    })),
+    create: async (body: Row, options: { returnRepresentation?: boolean } = {}) => {
+      const values = {
+        id: body.id, date: body.date, description: body.description, amount: body.amount, category: body.category,
+        payment_method: body.paymentMethod,
+      };
+      const saved = options.returnRepresentation === false
+        ? await insertRowWithoutRepresentation('expenses', values)
+        : await insertRow('expenses', values);
+      return mapExpense(saved);
+    },
     update: async (id: string, body: Row) => mapExpense(await updateRow('expenses', id, {
       date: body.date, description: body.description, amount: body.amount, category: body.category,
       payment_method: body.paymentMethod,
@@ -1262,9 +1410,11 @@ export const api = {
     list: async () => (await listRows('subscription_plans')).map(mapPlan),
     create: async (body: Row) => mapPlan(await insertRow('subscription_plans', {
       id: body.id, name: body.name, price: body.price, services: body.services, duration: body.duration,
+      salon_share_percent: body.salonSharePercent ?? null,
     })),
     update: async (id: string, body: Row) => mapPlan(await updateRow('subscription_plans', id, {
       name: body.name, price: body.price, services: body.services, duration: body.duration,
+      salon_share_percent: body.salonSharePercent ?? null,
     })),
     remove: (id: string) => removeRow('subscription_plans', id),
   },

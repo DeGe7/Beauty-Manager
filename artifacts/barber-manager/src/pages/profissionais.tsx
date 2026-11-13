@@ -13,6 +13,9 @@ import {
   OrganizationJoinRequestEventType,
 } from '@/data/api';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
+import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
+import { useTemporaryFormState } from '@/data/form-drafts';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Users, Plus, Trash2, Edit2, Mail, Phone, UserPlus, Copy, RefreshCw, Ban, CheckCircle2, Clock, UserCheck, UserX, ShieldAlert, Archive, RotateCcw } from 'lucide-react';
@@ -57,33 +60,78 @@ const getJoinRequestEventLabel = (event: OrganizationJoinRequestEvent) => {
 
 export default function Profissionais() {
   const { professionals, config, addProfessional, updateProfessional, removeProfessional, isLoading } = useStore();
+  const recentlyAddedProfessionalIds = useRecentlyAddedIds(professionals, isLoading);
   const { profile, viewAsProfile } = useAuth();
   const activeProfile = viewAsProfile ?? profile;
   const isManager = activeProfile?.role === 'gestor' || activeProfile?.role === 'dev-admin';
   const canGrantManagerAccess = profile?.role === 'gestor' && !viewAsProfile;
 
-  const [isOpen, setIsOpen] = useState(false);
-  const [managerGrantOpen, setManagerGrantOpen] = useState(false);
-  const [managerGrantConfirmOpen, setManagerGrantConfirmOpen] = useState(false);
-  const [managerGrantEmail, setManagerGrantEmail] = useState('');
+  const [professionalEditor, setProfessionalEditor, clearProfessionalEditor] = useTemporaryFormState(
+    'professional-editor',
+    'profissionais',
+    {
+      isOpen: false,
+      editingId: null as string | null,
+      form: {
+        name: '', role: 'barbeiro' as Professional['role'], initials: '', color: PRESET_COLORS[0], isActive: true,
+        commissions: { barbearia: 0, manutencao: 0, manicure: 0, protese: 0, mentoria: 0 },
+      },
+    },
+  );
+  const { isOpen } = professionalEditor;
+  const [managerGrantDraft, setManagerGrantDraft, clearManagerGrantDraft] = useTemporaryFormState(
+    'organization-manager-grant',
+    'profissionais',
+    { isOpen: false, confirmOpen: false, email: '' },
+  );
+  const { isOpen: managerGrantOpen, confirmOpen: managerGrantConfirmOpen, email: managerGrantEmail } = managerGrantDraft;
+  const setManagerGrantOpen = (open: boolean) => {
+    if (!open) clearManagerGrantDraft();
+    else setManagerGrantDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setManagerGrantConfirmOpen = (confirmOpen: boolean) => setManagerGrantDraft(current => ({ ...current, confirmOpen }));
+  const setManagerGrantEmail = (email: string) => setManagerGrantDraft(current => ({ ...current, email }));
   const [isGrantingManager, setIsGrantingManager] = useState(false);
-  const [editingId, setEditingId] = useState<string|null>(null);
-  const [form, setForm] = useState({
-    name: '', role: 'barbeiro' as Professional['role'], initials: '', color: PRESET_COLORS[0], isActive: true,
-    commissions: { barbearia: 0, manutencao: 0, manicure: 0, protese: 0, mentoria: 0 }
-  });
+  const editingId = professionalEditor.editingId;
+  const form = professionalEditor.form;
+  const setForm = (update: typeof form | ((current: typeof form) => typeof form)) => {
+    setProfessionalEditor(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
   const [invitations, setInvitations] = useState<OrganizationInvitation[]>([]);
   const [accountEmailsByProfessional, setAccountEmailsByProfessional] = useState<Record<string, string>>({});
   const [deletingInvitationId, setDeletingInvitationId] = useState<string | null>(null);
   const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
   const [cleanupLoading, setCleanupLoading] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteProfessional, setInviteProfessional] = useState<Professional | null>(null);
-  const [inviteRole, setInviteRole] = useState<'professional' | 'recepcao'>('professional');
-  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteDraft, setInviteDraft, clearInviteDraft, forgetInviteDraft] = useTemporaryFormState(
+    'team-invitation',
+    'profissionais',
+    {
+      isOpen: false,
+      professionalId: null as string | null,
+      role: 'professional' as 'professional' | 'recepcao',
+      email: '',
+      consent: false,
+    },
+  );
+  const {
+    isOpen: inviteOpen,
+    professionalId: inviteProfessionalId,
+    role: inviteRole,
+    email: inviteEmail,
+    consent: inviteConsent,
+  } = inviteDraft;
+  const inviteProfessional = professionals.find(professional => professional.id === inviteProfessionalId) ?? null;
+  const setInviteOpen = (open: boolean) => {
+    if (!open) clearInviteDraft();
+    else setInviteDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setInviteEmail = (email: string) => setInviteDraft(current => ({ ...current, email }));
+  const setInviteConsent = (consent: boolean) => setInviteDraft(current => ({ ...current, consent }));
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteSendLoading, setInviteSendLoading] = useState(false);
-  const [inviteConsent, setInviteConsent] = useState(false);
   const [generatedLink, setGeneratedLink] = useState('');
   const [generatedInvitation, setGeneratedInvitation] = useState<CreatedInvitation | null>(null);
   const [inviteDeliveryStatus, setInviteDeliveryStatus] = useState<'sending' | 'sent' | 'failed' | null>(null);
@@ -156,6 +204,24 @@ export default function Profissionais() {
       if (showError) {
         toast.error(error instanceof Error ? error.message : 'Não foi possível carregar os e-mails vinculados aos profissionais.');
       }
+    }
+  };
+
+  const copyOrganizationAccessLink = async () => {
+    if (!profile?.organizationId) {
+      toast.error('Não foi possível identificar o salão ativo.');
+      return;
+    }
+    const basePath = import.meta.env.BASE_URL.endsWith('/')
+      ? import.meta.env.BASE_URL
+      : `${import.meta.env.BASE_URL}/`;
+    const link = new URL(`${basePath}solicitar-acesso`, window.location.origin);
+    link.searchParams.set('organization', profile.organizationId);
+    try {
+      await navigator.clipboard.writeText(link.toString());
+      toast.success('Link de solicitação deste salão copiado.');
+    } catch {
+      window.prompt('Copie o link de solicitação deste salão:', link.toString());
     }
   };
 
@@ -397,21 +463,27 @@ export default function Profissionais() {
   };
 
   const handleOpenEdit = (p: Professional) => {
-    setEditingId(p.id);
-    setForm({
-      name: p.name, role: p.role, initials: p.initials, color: p.color, isActive: p.isActive,
-      commissions: { ...p.commissions }
+    setProfessionalEditor({
+      isOpen: true,
+      editingId: p.id,
+      form: {
+        name: p.name, role: p.role, initials: p.initials, color: p.color, isActive: p.isActive,
+        commissions: { ...p.commissions },
+      },
     });
-    setIsOpen(true);
   };
 
   const handleOpenNew = () => {
-    setEditingId(null);
-    setForm({
-      name: '', role: 'barbeiro', initials: '', color: PRESET_COLORS[Math.floor(Math.random()*PRESET_COLORS.length)], isActive: true,
-        commissions: { barbearia: 0, manutencao: 0, manicure: 0, protese: 0, mentoria: 0 }
-    });
-    setIsOpen(true);
+    setProfessionalEditor(current => current.isOpen && !current.editingId
+      ? { ...current, isOpen: true }
+      : {
+          isOpen: true,
+          editingId: null,
+          form: {
+            name: '', role: 'barbeiro', initials: '', color: PRESET_COLORS[Math.floor(Math.random()*PRESET_COLORS.length)], isActive: true,
+            commissions: { barbearia: 0, manutencao: 0, manicure: 0, protese: 0, mentoria: 0 },
+          },
+        });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -424,7 +496,7 @@ export default function Profissionais() {
       : await addProfessional({ ...form, initials });
     if (!saved) return;
     toast.success(editingId ? 'Profissional atualizado' : 'Profissional adicionado');
-    setIsOpen(false);
+    clearProfessionalEditor();
   };
 
   const handleDelete = async (id: string) => {
@@ -449,8 +521,7 @@ export default function Profissionais() {
         profile.organizationId,
       );
       setManagerGrantConfirmOpen(false);
-      setManagerGrantOpen(false);
-      setManagerGrantEmail('');
+      clearManagerGrantDraft();
       toast.success(
         `Acesso de Gestor concedido a ${result.fullName} em ${new Date(result.grantedAt).toLocaleString('pt-BR')}.`,
       );
@@ -462,27 +533,31 @@ export default function Profissionais() {
   };
 
   const openInvite = (professional: Professional) => {
-    setInviteProfessional(professional);
-    setInviteRole('professional');
-    setInviteEmail('');
+    setInviteDraft({
+      isOpen: true,
+      professionalId: professional.id,
+      role: 'professional',
+      email: '',
+      consent: false,
+    });
     setGeneratedLink('');
     setGeneratedInvitation(null);
     setInviteDeliveryStatus(null);
     setInviteDeliveryError('');
-    setInviteConsent(false);
-    setInviteOpen(true);
   };
 
   const openReceptionInvite = (email = '') => {
-    setInviteProfessional(null);
-    setInviteRole('recepcao');
-    setInviteEmail(email);
+    setInviteDraft({
+      isOpen: true,
+      professionalId: null,
+      role: 'recepcao',
+      email,
+      consent: false,
+    });
     setGeneratedLink('');
     setGeneratedInvitation(null);
     setInviteDeliveryStatus(null);
     setInviteDeliveryError('');
-    setInviteConsent(false);
-    setInviteOpen(true);
   };
 
   const resendReceptionInvite = (invitation: OrganizationInvitation) => {
@@ -538,6 +613,7 @@ export default function Profissionais() {
       const invitation = inviteRole === 'recepcao'
         ? await api.invitations.createReception(inviteEmail.trim())
         : await api.invitations.create(inviteProfessional!.id, inviteEmail.trim());
+      forgetInviteDraft();
       const basePath = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
       const link = `${window.location.origin}${basePath}convite/${invitation.token}`;
       setGeneratedInvitation(invitation);
@@ -629,29 +705,32 @@ export default function Profissionais() {
       toast.error('Este convite antigo foi criado por telefone. Gere um novo convite por e-mail.');
       return;
     }
-    setInviteProfessional(professional);
-    setInviteEmail(invitation.email);
-    setInviteConsent(false);
+    setInviteDraft({
+      isOpen: true,
+      professionalId: professional.id,
+      role: 'professional',
+      email: invitation.email,
+      consent: false,
+    });
     setGeneratedLink('');
-    setInviteOpen(true);
+    setGeneratedInvitation(null);
   };
 
   return (
-    <div className="p-5 md:p-8 space-y-6 max-w-7xl mx-auto">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+    <div className="p-4 sm:p-5 md:p-8 space-y-5 md:space-y-6 max-w-7xl mx-auto">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 md:gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Equipe</h2>
+          <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Equipe</h2>
           <p className="text-sm text-muted-foreground mt-1">{professionals.length} profissionais cadastrados</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap md:w-auto">
           {canGrantManagerAccess && (
             <button
               type="button"
               onClick={() => {
-                setManagerGrantEmail('');
-                setManagerGrantOpen(true);
+                setManagerGrantDraft({ isOpen: true, confirmOpen: false, email: '' });
               }}
-              className="inline-flex items-center gap-2 rounded-lg border border-brand-gold/40 px-4 py-2 text-sm font-semibold text-brand-gold hover:bg-brand-gold/10"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-brand-gold/40 px-4 py-2 text-sm font-semibold text-brand-gold hover:bg-brand-gold/10 sm:w-auto"
             >
               <UserPlus className="h-4 w-4" /> Vincular Gestor
             </button>
@@ -660,14 +739,20 @@ export default function Profissionais() {
             <button
               type="button"
               onClick={() => openReceptionInvite()}
-              className="inline-flex items-center gap-2 rounded-lg border border-brand-border px-4 py-2 text-sm font-semibold text-foreground hover:border-brand-gold hover:text-brand-gold"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-brand-border px-4 py-2 text-sm font-semibold text-foreground hover:border-brand-gold hover:text-brand-gold sm:w-auto"
             >
               <Mail className="h-4 w-4" /> Convidar Recepção
             </button>
           )}
-          <Dialog open={isOpen} onOpenChange={setIsOpen}>
+          <Dialog
+            open={isOpen}
+            onOpenChange={open => {
+              if (open) setProfessionalEditor(current => ({ ...current, isOpen: true }));
+              else clearProfessionalEditor();
+            }}
+          >
           <DialogTrigger asChild>
-            <button onClick={handleOpenNew} className="bg-brand-gold text-brand-bg px-4 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2">
+            <button onClick={handleOpenNew} className="min-h-11 w-full justify-center bg-brand-gold text-brand-bg px-4 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2 sm:w-auto">
               <Plus className="w-4 h-4" /> Adicionar Profissional
             </button>
           </DialogTrigger>
@@ -676,14 +761,14 @@ export default function Profissionais() {
             <form onSubmit={handleSubmit} className="space-y-6 pt-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2 md:col-span-1">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Nome *</label>
-                  <input type="text" required value={form.name} onChange={e => {
+                  <label htmlFor="professional-editor-name" className="text-xs font-semibold text-muted-foreground uppercase">Nome *</label>
+                  <input id="professional-editor-name" data-testid="input-professional-name" type="text" required value={form.name} onChange={e => {
                     setForm(f => ({ ...f, name: e.target.value, initials: !editingId ? getInitials(e.target.value) : f.initials }));
                   }} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold" />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Cargo</label>
-                  <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as any }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold">
+                  <label htmlFor="professional-editor-role" className="text-xs font-semibold text-muted-foreground uppercase">Cargo</label>
+                  <select id="professional-editor-role" data-testid="select-professional-role" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as any }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 mt-1 text-sm outline-none focus:ring-1 focus:ring-brand-gold">
                     {config.roles.filter(role => role.isActive).map(role => <option key={role.key} value={role.key}>{role.label}</option>)}
                   </select>
                 </div>
@@ -721,8 +806,10 @@ export default function Profissionais() {
               
               <div className="flex items-center justify-between p-4 bg-brand-bg border border-brand-border rounded-lg">
                 <div>
-                  <p className="font-bold text-sm">Status do Profissional</p>
-                  <p className="text-xs text-muted-foreground">Inativar esconde da agenda, mas mantém o histórico.</p>
+                  <div className="flex items-center gap-1">
+                    <p className="font-bold text-sm">Status do Profissional</p>
+                    <FeatureInfo label="Status do profissional">Inativar remove a pessoa da agenda, mas mantém seu histórico e registros.</FeatureInfo>
+                  </div>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input type="checkbox" checked={form.isActive} onChange={e => setForm(f => ({...f, isActive: e.target.checked}))} className="sr-only peer" />
@@ -825,7 +912,18 @@ export default function Profissionais() {
                 {joinRequests.filter(request => request.status === 'pending').length} aguardando aprovação
               </p>
             </div>
-            <UserCheck className="h-5 w-5 text-brand-gold" />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void copyOrganizationAccessLink()}
+                className="inline-flex items-center gap-2 rounded-lg border border-brand-border px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-brand-gold hover:text-brand-gold"
+                title="Copiar link para este salão"
+              >
+                <Copy className="h-4 w-4" />
+                <span className="hidden sm:inline">Copiar link</span>
+              </button>
+              <UserCheck className="h-5 w-5 text-brand-gold" />
+            </div>
           </div>
           {joinRequestError ? (
             <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4">
@@ -1147,7 +1245,7 @@ export default function Profissionais() {
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <h3 className="font-bold text-foreground">Histórico de convites da equipe</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Novos convites são por e-mail e expiram em até 30 dias. Convites antigos por telefone podem ser revogados ou removidos.</p>
+              <FeatureInfo label="Histórico de convites">Novos convites são enviados por e-mail e expiram em até 30 dias. Convites antigos por telefone podem ser revogados ou removidos.</FeatureInfo>
             </div>
             <div className="flex items-center gap-2">
               {cleanableInvitations.length > 0 && (
@@ -1324,7 +1422,7 @@ export default function Profissionais() {
           {professionals.map(p => {
             const contact = contactsForProfessional(p.id);
             return (
-            <div key={p.id} className={`bg-brand-surface border rounded-2xl p-5 flex flex-col ${!p.isActive ? 'border-brand-border/50 opacity-75' : 'border-brand-border hover:border-brand-gold/30'} transition-all`}>
+            <div key={p.id} className={`bg-brand-surface border rounded-2xl p-5 flex flex-col ${!p.isActive ? 'border-brand-border/50 opacity-75' : 'border-brand-border hover:border-brand-gold/30'} transition-all ${recentlyAddedProfessionalIds.has(p.id) ? 'bm-list-item-enter' : ''}`}>
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg" style={{ backgroundColor: p.color }}>
@@ -1370,11 +1468,11 @@ export default function Profissionais() {
               <div className="flex-1 bg-brand-bg rounded-xl p-3 border border-brand-border/50 mb-4">
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Comissões Ativas</p>
                 <div className="flex flex-wrap gap-2">
-                  <span className="text-[10px] bg-brand-gold/10 text-brand-gold px-2 py-1 rounded font-medium">
+                  <span className="text-[11px] sm:text-[10px] bg-brand-gold/10 text-brand-gold px-2 py-1 rounded font-medium">
                     Serviço: {Math.round(PROFESSIONAL_SERVICE_COMMISSION_RATE * 100)}% profissional / 50% salão
                   </span>
                   {PROFESSIONAL_SALES_COMMISSION_FIELDS.filter(({ key }) => p.commissions[key] > 0).map(({ key, label }) => (
-                    <span key={key} className="text-[10px] bg-brand-gold/10 text-brand-gold px-2 py-1 rounded font-medium">
+                    <span key={key} className="text-[11px] sm:text-[10px] bg-brand-gold/10 text-brand-gold px-2 py-1 rounded font-medium">
                       Venda de {label}: {Math.round(p.commissions[key] * 100)}%
                     </span>
                   ))}
@@ -1458,7 +1556,7 @@ export default function Profissionais() {
                   <Mail className="h-4 w-4" /> {inviteSendLoading ? 'Enviando...' : 'Tentar enviar novamente'}
                 </button>
               )}
-              <p className="text-xs text-muted-foreground">Se o envio automático falhar, você ainda pode copiar e compartilhar o link do convite.</p>
+              <FeatureInfo label="Compartilhar convite">Se o envio automático falhar, copie e compartilhe o link do convite manualmente.</FeatureInfo>
               <button type="button" onClick={() => setInviteOpen(false)} className="w-full rounded-lg border border-brand-border py-3 text-sm font-semibold hover:border-brand-gold hover:text-brand-gold">Fechar</button>
             </div>
           )}

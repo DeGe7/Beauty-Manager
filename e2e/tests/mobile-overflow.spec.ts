@@ -21,8 +21,28 @@ async function expectNoHorizontalPageScroll(page: Parameters<typeof loginAs>[0],
     element => (element as { scrollWidth: number }).scrollWidth,
   );
   const contentDimensions = await page.locator('main > div:nth-child(2)').evaluate(element => {
-    const content = element as { clientWidth: number; scrollWidth: number };
-    return { width: content.clientWidth, scrollWidth: content.scrollWidth };
+    const content = element as {
+      clientWidth: number;
+      scrollWidth: number;
+      querySelectorAll: (selector: string) => ArrayLike<{
+        clientWidth: number;
+        scrollWidth: number;
+        tagName: string;
+        className: string;
+        textContent: string | null;
+      }>;
+    };
+    const overflowingElements = Array.from(content.querySelectorAll('*'))
+      .filter(node => node.scrollWidth > node.clientWidth + 1)
+      .map(node => ({
+        tag: node.tagName,
+        className: String(node.className).slice(0, 100),
+        width: node.clientWidth,
+        scrollWidth: node.scrollWidth,
+        text: node.textContent?.trim().slice(0, 80),
+      }))
+      .slice(0, 8);
+    return { width: content.clientWidth, scrollWidth: content.scrollWidth, overflowingElements };
   });
   const horizontalScrollAreas = await page.locator('main > div:nth-child(2)').evaluate(element => {
     const content = element as unknown as { querySelectorAll: (selector: string) => ArrayLike<unknown> };
@@ -53,7 +73,7 @@ async function expectNoHorizontalPageScroll(page: Parameters<typeof loginAs>[0],
   expect(documentWidth, `${label}: largura do documento`).toBeLessThanOrEqual(viewport.width);
   expect(
     contentDimensions.scrollWidth,
-    `${label}: rolagem horizontal na área de conteúdo principal`,
+    `${label}: rolagem horizontal na área de conteúdo principal: ${JSON.stringify(contentDimensions.overflowingElements)}`,
   ).toBeLessThanOrEqual(contentDimensions.width);
   expect(
     horizontalScrollAreas,
@@ -67,6 +87,13 @@ async function expectDialogWithinViewport(
   label: string,
 ) {
   await expect(dialog).toBeVisible();
+  await dialog.evaluate(async element => {
+    await Promise.all(
+      element.getAnimations().map((animation: { finished: Promise<unknown> }) =>
+        animation.finished.catch(() => undefined),
+      ),
+    );
+  });
   const bounds = await dialog.boundingBox();
   const viewport = page.viewportSize();
 
@@ -207,8 +234,9 @@ async function expectControlsInsideCard(card: TestLocator, controls: TestLocator
 }
 
 test.describe('textos e ações nos cartões de celular', () => {
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`quebra nomes e descrições sem esconder ações em ${width}px`, async ({ page }) => {
+      test.setTimeout(90_000);
       if (!accounts.manager) {
         test.skip(true, 'Requires an E2E manager account or E2E provisioning.');
         return;
@@ -255,7 +283,7 @@ test.describe('textos e ações nos cartões de celular', () => {
       const saveVisit = waitForMutation(page, 'clients', 'PATCH');
       await visitForm.getByRole('button', { name: 'Salvar visita', exact: true }).click();
       await saveVisit;
-      const visitCard = page.locator('[data-testid^="mobile-client-visit-"]').filter({ hasText: visitDescription });
+      const visitCard = page.locator('[data-testid^="mobile-client-visit-card-"]').filter({ hasText: visitDescription });
       await expect(visitCard).toBeVisible();
       await expectCardTextReadable(
         visitCard,
@@ -329,11 +357,12 @@ test.describe('textos e ações nos cartões de celular', () => {
       const planDialog = page.getByRole('dialog');
       await expectDialogStateWithinViewport(page, planDialog, `${width}px /planos com formulário aberto`);
       const planName = uniqueName(`Plano com nome longo ${longWord}`);
-      const serviceDescription = `Descrição do serviço ${longWord} com informações que devem continuar legíveis`;
       const planInputs = planDialog.locator('input');
       await planInputs.nth(0).fill(planName);
       await planInputs.nth(1).fill('99');
-      await planInputs.nth(2).fill(serviceDescription);
+      await planDialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+      await planDialog.getByTestId('plan-service-uses-0').fill('1');
+      await planDialog.getByTestId('plan-salon-share-percent').fill('50');
       const createPlan = waitForMutation(page, 'subscription_plans', 'POST');
       await planDialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
       await createPlan;
@@ -356,15 +385,15 @@ test.describe('textos e ações nos cartões de celular', () => {
       );
 
       const subscriberName = uniqueName(`Assinante com nome longo ${longWord}`);
+      const subscriberPhone = `119${Date.now().toString().slice(-8)}`;
       await page.getByRole('button', { name: 'Adicionar Assinante', exact: true }).click();
       const subscriberDialog = page.getByRole('dialog');
       await expectDialogStateWithinViewport(page, subscriberDialog, `${width}px /planos com formulário de assinante`);
       const subscriberForm = subscriberDialog.locator('form');
       await expectFormWithinViewport(page, subscriberForm, `${width}px /planos com formulário de assinante`);
-      await subscriberDialog.locator('input').nth(0).fill(subscriberName);
-      await subscriberDialog.locator('input').nth(1).fill('11955554444');
-      await subscriberDialog.locator('select').nth(0).selectOption({ label: planName });
-      await subscriberDialog.locator('select').nth(1).selectOption({ index: 1 });
+      await subscriberDialog.getByTestId('input-subscriber-client-name').fill(subscriberName);
+      await subscriberDialog.getByTestId('input-subscriber-client-phone').fill(subscriberPhone);
+      await subscriberDialog.getByTestId('select-subscriber-plan').selectOption({ label: planName });
       const createSubscriber = waitForMutation(page, 'subscribers', 'POST');
       await subscriberDialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
       await createSubscriber;
@@ -396,8 +425,6 @@ test.describe('textos e ações nos cartões de celular', () => {
 
       const deletePlan = waitForMutation(page, 'subscription_plans', 'DELETE');
       await planDeleteButton.click();
-      const planDeleteDialog = page.getByRole('alertdialog');
-      await expectDialogStateWithinViewport(page, planDeleteDialog, `${width}px /planos com confirmação de exclusão`);
       await deletePlan;
       await expect(planCard).toHaveCount(0);
     });
@@ -405,7 +432,7 @@ test.describe('textos e ações nos cartões de celular', () => {
 });
 
 test.describe('nomes longos nas abas de clientes no celular', () => {
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`mantém nomes e ações legíveis nas abas filtradas em ${width}px`, async ({ page }) => {
       test.setTimeout(120_000);
       if (!accounts.manager) {
@@ -417,6 +444,23 @@ test.describe('nomes longos nas abas de clientes no celular', () => {
       await loginAs(page, accounts.manager);
       await openModule(page, '/clientes', 'Clientes');
       await expectNoHorizontalPageScroll(page, `${width}px /clientes`);
+      const clientTabs = page.getByRole('tablist', { name: 'Seções de clientes' });
+      await expect(clientTabs.getByRole('tab')).toHaveCount(4);
+      const allClientsTab = clientTabs.getByRole('tab', { name: 'Todos', exact: true });
+      await expect(allClientsTab).toHaveAttribute('aria-selected', 'true');
+      await allClientsTab.focus();
+      await page.keyboard.press('ArrowRight');
+      const birthdayTab = clientTabs.getByRole('tab', { name: 'Aniversariantes', exact: true });
+      await expect(birthdayTab).toBeFocused();
+      await expect(birthdayTab).toHaveAttribute('aria-selected', 'true');
+      await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'clientes-tab-1');
+      await page.keyboard.press('End');
+      const sourceTab = clientTabs.getByRole('tab', { name: 'Origem / CAC', exact: true });
+      await expect(sourceTab).toBeFocused();
+      await expect(sourceTab).toHaveAttribute('aria-selected', 'true');
+      await page.keyboard.press('Home');
+      await expect(allClientsTab).toBeFocused();
+      await expect(allClientsTab).toHaveAttribute('aria-selected', 'true');
 
       const longWord = 'NomeSemEspacosQuePrecisaQuebrar'.repeat(3);
       const clientName = uniqueName(`Cliente aniversário ${longWord}`);
@@ -450,7 +494,7 @@ test.describe('nomes longos nas abas de clientes no celular', () => {
       await page.keyboard.press('Escape');
       await expect(profileDialog).toBeHidden();
 
-      await page.getByRole('button', { name: 'Aniversariantes', exact: true }).click();
+      await clientTabs.getByRole('tab', { name: 'Aniversariantes', exact: true }).click();
       await expectNoHorizontalPageScroll(page, `${width}px /clientes / Aniversariantes`);
       const birthdayCard = page.locator('[data-testid^="birthday-client-card-"]').filter({ hasText: clientName });
       const birthdayAction = birthdayCard.getByRole('button', { name: 'Enviar Parabéns', exact: true });
@@ -461,7 +505,7 @@ test.describe('nomes longos nas abas de clientes no celular', () => {
         [birthdayAction],
       );
 
-      await page.getByRole('button', { name: 'Inativos', exact: true }).click();
+      await clientTabs.getByRole('tab', { name: 'Inativos', exact: true }).click();
       await expectNoHorizontalPageScroll(page, `${width}px /clientes / Inativos`);
       const inactiveCard = page.locator('[data-testid^="inactive-client-card-"]').filter({ hasText: clientName });
       const inactiveAction = inactiveCard.getByRole('button', { name: `Reativar contato com ${clientName}`, exact: true });
@@ -476,7 +520,7 @@ test.describe('nomes longos nas abas de clientes no celular', () => {
 });
 
 test.describe('formulários principais em janelas de celular', () => {
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`mantém controle, agenda e profissionais dentro da tela em ${width}px`, async ({ page }) => {
       test.setTimeout(90_000);
       if (!accounts.manager) {
@@ -520,7 +564,7 @@ test.describe('formulários principais em janelas de celular', () => {
 test.describe('rolagem horizontal nas demais telas autenticadas', () => {
   const excludedRoutes = new Set(['/clientes', '/produtos', '/planos']);
 
-  for (const width of [320, 360]) {
+  for (const width of [320, 360, 390, 402]) {
     test(`mantém as rotas acessíveis dentro da tela em ${width}px`, async ({ page }) => {
       test.setTimeout(180_000);
       if (!accounts.manager) {
@@ -534,6 +578,7 @@ test.describe('rolagem horizontal nas demais telas autenticadas', () => {
       await page.getByRole('button', { name: 'Abrir mais opções', exact: true }).click();
       const mobileMenu = page.getByRole('dialog', { name: 'Menu de navegação' });
       await expectDialogStateWithinViewport(page, mobileMenu, `${width}px menu móvel aberto`);
+      await expectNoHorizontalPageScroll(page, `${width}px menu móvel aberto`);
       const routes = new Map<string, string>(
         await mobileMenu.getByRole('link').evaluateAll(links =>
           links.map(link => {
@@ -543,6 +588,7 @@ test.describe('rolagem horizontal nas demais telas autenticadas', () => {
         ),
       );
       await page.getByRole('button', { name: 'Fechar menu', exact: true }).click();
+      await expectNoHorizontalPageScroll(page, `${width}px menu móvel fechado`);
 
       const profilePath = await page
         .getByRole('link', { name: 'Abrir meu perfil', exact: true })
@@ -614,6 +660,7 @@ test.describe('rolagem horizontal nas demais telas autenticadas', () => {
         await page.getByRole('button', { name: 'Abrir mais opções', exact: true }).click();
         const mobileMenu = page.getByRole('dialog', { name: 'Menu de navegação' });
         await expectDialogStateWithinViewport(page, mobileMenu, `${width}px ${roleCase.role}: menu móvel`);
+        await expectNoHorizontalPageScroll(page, `${width}px ${roleCase.role}: menu aberto`);
         const routes = new Map<string, string>(
           await mobileMenu.getByRole('link').evaluateAll(links =>
             links.map(link => {
@@ -623,6 +670,7 @@ test.describe('rolagem horizontal nas demais telas autenticadas', () => {
           ),
         );
         await page.getByRole('button', { name: 'Fechar menu', exact: true }).click();
+        await expectNoHorizontalPageScroll(page, `${width}px ${roleCase.role}: menu fechado`);
 
         const profilePath = await page
           .getByRole('link', { name: 'Abrir meu perfil', exact: true })

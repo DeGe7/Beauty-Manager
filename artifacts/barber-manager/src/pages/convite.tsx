@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { ArrowLeft, Building2, CheckCircle2, CircleAlert, Loader2, Mail, Scissors } from 'lucide-react';
+import { ArrowLeft, Building2, CheckCircle2, CircleAlert, Loader2, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/auth/auth';
 import { api } from '@/data/api';
 import CaptchaChallenge, { captchaRequired } from '@/auth/captcha';
+import { BrandMark } from '@/components/BrandMark';
 import { isAuthRateLimitError, useAuthRateLimit } from '@/auth/rate-limit';
 
 function invitationToken(): string {
@@ -156,7 +157,7 @@ export default function Convite() {
 
   if (status === 'validating' || status === 'accepting') {
     return (
-      <div className="min-h-[100dvh] bg-brand-bg flex items-center justify-center p-6 text-center">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg p-5 text-center">
         <div className="space-y-4">
           <Loader2 className="mx-auto h-10 w-10 animate-spin text-brand-gold" />
           <h1 className="text-xl font-bold text-foreground">{status === 'accepting' ? 'Vinculando sua conta' : 'Validando convite'}</h1>
@@ -168,8 +169,8 @@ export default function Convite() {
 
   if (status === 'error') {
     return (
-      <div className="min-h-[100dvh] bg-brand-bg flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-brand-border bg-brand-surface p-8 text-center space-y-5">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
+        <div className="w-full max-w-md space-y-5 rounded-2xl border border-brand-border bg-brand-surface p-5 text-center sm:p-8">
           <CircleAlert className="mx-auto h-12 w-12 text-destructive" />
           <div>
             <h1 className="text-2xl font-bold text-foreground">Convite não disponível</h1>
@@ -191,11 +192,11 @@ export default function Convite() {
 
   if (stage === 'confirmation' && invitationInfo) {
     return (
-      <div className="min-h-[100dvh] bg-brand-bg flex items-center justify-center p-6">
-        <section className="w-full max-w-md space-y-5 rounded-2xl border border-brand-border bg-brand-surface p-8 text-center">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
+        <section className="w-full max-w-md space-y-5 rounded-2xl border border-brand-border bg-brand-surface p-5 text-center sm:p-8">
           <Mail className="mx-auto h-12 w-12 text-brand-gold" />
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Barber Manager</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Beauty Manager</p>
             <h1 className="mt-3 text-2xl font-bold text-foreground">Confirme seu e-mail</h1>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
               Enviamos a confirmação para <span className="font-medium text-foreground">{invitationInfo.email}</span>.
@@ -212,19 +213,17 @@ export default function Convite() {
 
   if (stage === 'account' && invitationInfo) {
     return (
-      <div className="min-h-[100dvh] bg-brand-bg flex items-center justify-center p-6 relative overflow-hidden">
+      <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-brand-bg px-4 py-8">
         <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,hsl(var(--brand-gold)/0.08),transparent_55%)]" />
         <section className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-brand-border bg-brand-surface shadow-2xl">
-          <header className="border-b border-brand-border bg-brand-bg/30 p-7 text-center sm:p-8">
-            <div className="mx-auto mb-4 inline-flex rounded-xl border border-brand-gold/20 bg-brand-gold/10 p-4 text-brand-gold">
-              <Scissors className="h-8 w-8" />
-            </div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Barber Manager</p>
+          <header className="border-b border-brand-border bg-brand-bg/30 p-5 text-center sm:p-8">
+            <BrandMark className="mx-auto mb-4 h-16 w-16" />
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-gold">Beauty Manager</p>
             <h1 className="mt-2 text-2xl font-bold text-foreground">Criar seu acesso</h1>
             <p className="mt-2 text-sm text-muted-foreground">Convite para entrar em</p>
             <p className="mt-1 text-lg font-semibold text-brand-gold" data-testid="text-invited-company">{invitationInfo.organizationName}</p>
           </header>
-          <form onSubmit={createAccount} className="space-y-4 p-6">
+          <form onSubmit={createAccount} className="space-y-4 p-5 sm:p-6">
             <button type="button" onClick={() => { setStage('invitation'); setSignupError(''); }} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-brand-gold" data-testid="button-back-to-invitation">
               <ArrowLeft className="h-4 w-4" /> Voltar ao convite
             </button>
@@ -294,18 +293,16 @@ export default function Convite() {
   if (!invitationInfo) return null;
 
   return (
-    <div className="min-h-[100dvh] bg-brand-bg flex items-center justify-center p-6 relative overflow-hidden">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-brand-bg px-4 py-8">
       <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,hsl(var(--brand-gold)/0.08),transparent_55%)]" />
       <div className="relative z-10 w-full max-w-md rounded-2xl border border-brand-border bg-brand-surface shadow-2xl overflow-hidden">
-        <div className="border-b border-brand-border bg-brand-bg/30 p-8 text-center">
-          <div className="mx-auto mb-5 inline-flex rounded-xl border border-brand-gold/20 bg-brand-gold/10 p-4 text-brand-gold">
-            <Scissors className="h-8 w-8" />
-          </div>
+        <div className="border-b border-brand-border bg-brand-bg/30 p-5 text-center sm:p-8">
+          <BrandMark className="mx-auto mb-5 h-16 w-16" />
           <h1 className="text-2xl font-bold text-foreground">Convite para a equipe</h1>
           <p className="mt-2 text-sm text-muted-foreground">Você recebeu um convite para entrar em</p>
           <p className="mt-1 text-lg font-semibold text-brand-gold" data-testid="text-invitation-company">{invitationInfo.organizationName}</p>
         </div>
-        <div className="space-y-4 p-6">
+        <div className="space-y-4 p-5 sm:p-6">
           <div className="flex gap-3 rounded-xl border border-brand-border bg-brand-bg/60 p-4">
             <Building2 className="mt-0.5 h-5 w-5 shrink-0 text-brand-gold" />
             <p className="text-sm leading-relaxed text-muted-foreground">

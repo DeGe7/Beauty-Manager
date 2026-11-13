@@ -6,6 +6,7 @@ begin;
 create extension if not exists pgtap;
 select plan(87);
 create temporary table join_request_invitation_test_token (token text not null);
+grant select, insert on join_request_invitation_test_token to authenticated;
 
 select is(
   to_regclass('public.organization_join_requests'),
@@ -88,7 +89,7 @@ select ok(
   'authenticated managers can call the guarded request restoration function'
 );
 select ok(
-  has_function_privilege('anon', 'public.request_organization_join(text,text,text)', 'EXECUTE'),
+  has_function_privilege('anon', 'public.request_organization_join(uuid,text,text,text)', 'EXECUTE'),
   'anonymous visitors can submit a request without an account'
 );
 select ok(
@@ -120,6 +121,9 @@ insert into public.professionals (id, name, role, organization_id)
 values ('professional-join-available', 'Profissional cadastrado', 'barbeiro', '31111111-1111-1111-1111-111111111111');
 insert into public.organization_members (organization_id, user_id, role)
 values ('31111111-1111-1111-1111-111111111111', '30000000-0000-0000-0000-000000000001', 'gestor');
+update public.deployment_settings
+   set enabled = false
+ where setting_key = 'organization_creation_enabled';
 set local session_replication_role = origin;
 
 select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000002', true);
@@ -131,8 +135,8 @@ select is(
 );
 select is(
   public.get_onboarding_options() ->> 'can_request_access',
-  'true',
-  'an unlinked account can request access to the existing company'
+  'false',
+  'a request must use the salon-specific link, not infer a single company'
 );
 select is(
   (select count(*) from public.organization_join_requests),
@@ -150,54 +154,61 @@ reset role;
 set local role anon;
 select set_config('request.jwt.claim.sub', '', true);
 select lives_ok(
-  $$select public.request_organization_join('Profissional de teste', 'profissional-join@example.test', null)$$,
+  $$select public.request_organization_join('31111111-1111-1111-1111-111111111111', 'Profissional de teste', 'profissional-join@example.test', null)$$,
   'an unauthenticated visitor can submit a request with one contact'
 );
 select set_config('request.headers', '{"cf-connecting-ip":"198.51.100.21"}', true);
 select throws_ok(
-  $$select public.request_organization_join('Profissional telefone', null, '+5511999990000')$$,
+  $$select public.request_organization_join('31111111-1111-1111-1111-111111111111', 'Profissional telefone', null, '+5511999990000')$$,
   'P0001',
   'phone access requests are disabled',
   'an unauthenticated visitor cannot submit a phone request'
 );
+reset role;
 select is(
   (select count(*) from public.organization_join_requests
     where applicant_phone = '+5511999990000' and status = 'pending'),
   0::bigint,
   'disabled phone requests are not recorded'
 );
+set local role anon;
 select set_config('request.headers', '{"cf-connecting-ip":"198.51.100.22"}', true);
 select lives_ok(
-  $$do $spam$
+  $do$do $spam$
     declare request_number integer;
     begin
       for request_number in 1..10 loop
         perform public.request_organization_join(
+          '31111111-1111-1111-1111-111111111111',
           'Profissional em teste',
           format('spam-%s@example.test', request_number),
           null
         );
       end loop;
     end;
-  $spam$$,
+  $spam$$do$,
   'ten distinct contact requests are accepted within the hourly network limit'
 );
+reset role;
 select is(
   (select count(*) from public.organization_join_requests
     where applicant_email like 'spam-%@example.test' and status = 'pending'),
   10::bigint,
   'changing email addresses does not avoid accounting against the same network limit'
 );
+set local role anon;
 select is(
-  (public.request_organization_join('Profissional em teste', 'spam-11@example.test', null) ->> 'rate_limited'),
+  (public.request_organization_join('31111111-1111-1111-1111-111111111111', 'Profissional em teste', 'spam-11@example.test', null) ->> 'rate_limited'),
   'true',
   'the next distinct request is rate-limited even with a new contact'
 );
+-- A phone address cannot bypass a network limit already reached by email.
 select is(
-  (public.request_organization_join('Profissional por telefone', null, '+5511999990001') ->> 'rate_limited'),
+  (public.request_organization_join('31111111-1111-1111-1111-111111111111', 'Profissional por telefone', null, '+5511999990001') ->> 'rate_limited'),
   'true',
   'switching from email to phone does not bypass the network limit'
 );
+reset role;
 select is(
   (select count(*) from public.organization_join_requests
     where applicant_email = 'spam-11@example.test'
@@ -205,35 +216,41 @@ select is(
   0::bigint,
   'rate-limited submissions are not added to the manager queue'
 );
+set local role anon;
 select set_config('request.headers', '{}', true);
 select lives_ok(
-  $$do $fallback$
+  $do$do $fallback$
     declare request_number integer;
     begin
       for request_number in 1..3 loop
         perform public.request_organization_join(
+          '31111111-1111-1111-1111-111111111111',
           'Visitante sem endereço de rede',
           format('fallback-%s@example.test', request_number),
           null
         );
       end loop;
     end;
-  $fallback$$,
+  $fallback$$do$,
   'the fallback limit permits three requests when the network address is unavailable'
 );
 select is(
   (public.request_organization_join(
+    '31111111-1111-1111-1111-111111111111',
     'Visitante sem endereço de rede', 'fallback-4@example.test', null
   ) ->> 'rate_limited'),
   'true',
   'changing contact details cannot bypass the fallback request limit'
 );
+reset role;
 select is(
   (select count(*) from public.organization_join_requests
     where applicant_email like 'fallback-%@example.test'),
   3::bigint,
   'fallback-limited requests are not inserted'
 );
+set local role anon;
+select set_config('request.jwt.claim.sub', '', true);
 select throws_ok(
   $$insert into public.organization_join_requests (organization_id, applicant_name, applicant_email) values ('31111111-1111-1111-1111-111111111111', 'Falsificado', 'fake@example.test')$$,
   '42501',
@@ -327,8 +344,9 @@ select is(
 reset role;
 
 set local role anon;
+select set_config('request.jwt.claim.sub', '', true);
 select throws_ok(
-  $$select public.request_organization_join('Profissional de teste', 'profissional-join@example.test', null)$$,
+  $$select public.request_organization_join('31111111-1111-1111-1111-111111111111', 'Profissional de teste', 'profissional-join@example.test', null)$$,
   'P0001',
   'this contact already has an approved access request',
   'a second public request cannot duplicate an approved contact'
@@ -471,6 +489,8 @@ select is(
   1::bigint,
   'the request is returned to pending without retaining the reserved profile'
 );
+select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', true);
+set local role authenticated;
 select throws_ok(
   $$select public.archive_rejected_organization_join_request((select id from public.organization_join_requests where applicant_email = 'profissional-join@example.test'))$$,
   'P0001',
@@ -600,7 +620,7 @@ set local session_replication_role = origin;
 select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000003', true);
 set local role authenticated;
 select lives_ok(
-  $$select public.request_organization_join('Profissional para arquivar', 'arquivar-request@example.test', null)$$,
+  $$select public.request_organization_join('31111111-1111-1111-1111-111111111111', 'Profissional para arquivar', 'arquivar-request@example.test', null)$$,
   'a new professional can submit a request that can later be archived'
 );
 reset role;

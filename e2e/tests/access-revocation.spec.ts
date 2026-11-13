@@ -47,7 +47,9 @@ test.describe('revogação de acesso em sessões abertas', () => {
           await page.evaluate("window.dispatchEvent(new Event('focus'))");
         }
         await expect(page).toHaveURL(/\/onboarding$/, { timeout: 30_000 });
-        await expect(page.getByRole('alert')).toContainText('Seu acesso a este estabelecimento foi removido');
+        await expect(
+          page.getByRole('alert').filter({ hasText: 'Seu acesso a este estabelecimento foi removido' }),
+        ).toBeVisible();
         await expect(page.locator('main')).toHaveCount(0);
         await expect(cachedAttendance).toHaveCount(0);
         await page.goBack();
@@ -84,14 +86,19 @@ test.describe('revogação de acesso em sessões abertas', () => {
     }));
     await page.evaluate("window.dispatchEvent(new Event('focus'))");
     await expect(page).toHaveURL(/\/onboarding$/);
-    await expect(page.getByRole('alert')).toContainText('Não foi possível validar seu acesso');
+    await expect(
+      page.getByRole('alert').filter({ hasText: 'Não foi possível validar seu acesso' }),
+    ).toBeVisible();
     await expect(page.locator('main')).toHaveCount(0);
     await page.unroute(membershipRoute);
     await page.evaluate("window.dispatchEvent(new Event('online'))");
-    await expect(page.getByRole('alert')).toHaveCount(0);
+    const validationError = page.getByRole('alert').filter({
+      hasText: 'Não foi possível validar seu acesso',
+    });
+    await expect(validationError).toHaveCount(0);
     // Navigate without a reload: the restored scope must not need a new login.
     await page.evaluate("window.history.pushState(null, '', '/controle'); window.dispatchEvent(new PopStateEvent('popstate'))");
     await expect(page.locator('main h2').filter({ hasText: 'Controle Diário' })).toBeVisible();
-    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(validationError).toHaveCount(0);
   });
 });

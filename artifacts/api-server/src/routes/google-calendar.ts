@@ -174,11 +174,11 @@ function localDateTime(date: string, time: string, duration: number): {
 
 function toGoogleEvent(appointment: AppointmentRow, includeId: boolean) {
   const cancelled = appointment.status === "cancelled";
-  const summary = `${cancelled ? "[CANCELADO] " : ""}Barber Manager | ${appointment.client}`.slice(0, 250);
+  const summary = `${cancelled ? "[CANCELADO] " : ""}Beauty Manager | ${appointment.client}`.slice(0, 250);
   const event = {
     summary,
     description: [
-      "Agendamento criado pelo Barber Manager.",
+      "Agendamento criado pelo Beauty Manager.",
       `Serviço: ${appointment.service}`,
       `Duração: ${appointment.duration} minutos`,
     ].join("\n"),

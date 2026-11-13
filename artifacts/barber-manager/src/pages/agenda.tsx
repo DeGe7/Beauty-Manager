@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore, brl, ApptStatus } from '@/data/store';
 import { useAuth } from '@/auth/auth';
+import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/data/api';
@@ -17,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { formatDateKey } from '@/data/date';
 import { canDeleteAttendance } from '@/data/attendance-deletion';
 import { isAssignableProfessional } from '@/data/professional-selection';
+import { useTemporaryFormState } from '@/data/form-drafts';
 
 // Helper for dates
 const dToStr = (d: Date) => formatDateKey(d);
@@ -77,8 +79,31 @@ export default function Agenda() {
   };
 
   // Forms
-  const [isApptOpen, setIsApptOpen] = useState(false);
-  const [apptForm, setApptForm] = useState({ time: '09:00', client: '', phone: '', profId: '', service: 'Barbearia', status: 'pending' as ApptStatus, value: 0 });
+  const [appointmentDraft, setAppointmentDraft, clearAppointmentDraft] = useTemporaryFormState(
+    'appointment-create',
+    'agenda',
+    {
+      isOpen: false,
+      date: dToStr(new Date()),
+      form: { time: '09:00', client: '', phone: '', profId: '', service: 'Barbearia', status: 'pending' as ApptStatus, value: 0 },
+    },
+  );
+  const { isOpen: isApptOpen, form: apptForm } = appointmentDraft;
+  const setIsApptOpen = (open: boolean) => {
+    if (!open) {
+      clearAppointmentDraft();
+      return;
+    }
+    setAppointmentDraft(current => current.isOpen
+      ? current
+      : { ...current, isOpen: true, date: selectedDate });
+  };
+  const setApptForm = (update: typeof apptForm | ((current: typeof apptForm) => typeof apptForm)) => {
+    setAppointmentDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
   
   // Interval overlap helper — true if [s1, s1+d1) overlaps [s2, s2+d2)
   const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
@@ -112,11 +137,11 @@ export default function Agenda() {
     const resolvedProfId = ownProfessionalId || apptForm.profId;
     const serviceItem = config.services.find(s => s.name === apptForm.service && s.isActive);
     if (!apptForm.client || !resolvedProfId || !serviceItem) { toast.error('Preencha os campos obrigatórios'); return; }
-    const conflict = checkConflicts(selectedDate, apptForm.time, resolvedProfId, apptForm.service);
+    const conflict = checkConflicts(appointmentDraft.date, apptForm.time, resolvedProfId, apptForm.service);
     if (conflict) { toast.error(conflict); return; }
 
     const createdAppointment = await addAppointment({
-      date: selectedDate,
+      date: appointmentDraft.date,
       time: apptForm.time,
       client: apptForm.client,
       clientPhone: apptForm.phone,
@@ -136,18 +161,41 @@ export default function Agenda() {
       });
     });
     toast.success('Agendamento criado');
-    setIsApptOpen(false);
+    clearAppointmentDraft();
   };
 
   // Edit appointment
-  const [isEditOpen, setIsEditOpen] = useState(false);
-  const [editAppt, setEditAppt] = useState<typeof appointments[0] | null>(null);
-  const [editForm, setEditForm] = useState({ client: '', phone: '', profId: '', service: 'Barbearia', time: '09:00', value: 0 });
+  const [appointmentEditDraft, setAppointmentEditDraft, clearAppointmentEditDraft] = useTemporaryFormState(
+    'appointment-edit',
+    'agenda',
+    {
+      isOpen: false,
+      appointmentId: null as string | null,
+      form: { client: '', phone: '', profId: '', service: 'Barbearia', time: '09:00', value: 0 },
+    },
+  );
+  const { isOpen: isEditOpen, appointmentId: editApptId, form: editForm } = appointmentEditDraft;
+  const editAppt = appointments.find(appointment => appointment.id === editApptId) ?? null;
+  const setIsEditOpen = (open: boolean) => {
+    if (!open) {
+      clearAppointmentEditDraft();
+      return;
+    }
+    setAppointmentEditDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setEditForm = (update: typeof editForm | ((current: typeof editForm) => typeof editForm)) => {
+    setAppointmentEditDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
 
   const openEdit = (a: typeof appointments[0]) => {
-    setEditAppt(a);
-    setEditForm({ client: a.client, phone: a.clientPhone || '', profId: a.professionalId, service: a.service, time: a.time, value: a.value });
-    setIsEditOpen(true);
+    setAppointmentEditDraft({
+      isOpen: true,
+      appointmentId: a.id,
+      form: { client: a.client, phone: a.clientPhone || '', profId: a.professionalId, service: a.service, time: a.time, value: a.value },
+    });
   };
 
   const handleEditAppt = async (e: React.FormEvent) => {
@@ -168,25 +216,48 @@ export default function Agenda() {
       });
     });
     toast.success('Agendamento atualizado');
-    setIsEditOpen(false);
+    clearAppointmentEditDraft();
   };
 
-  const [isBlockOpen, setIsBlockOpen] = useState(false);
-  const [blockForm, setBlockForm] = useState({ profId: '', reason: 'Folga', fullDay: true, slots: [] as string[], notes: '' });
+  const [blockDraft, setBlockDraft, clearBlockDraft] = useTemporaryFormState(
+    'schedule-block',
+    'agenda',
+    {
+      isOpen: false,
+      date: dToStr(new Date()),
+      form: { profId: '', reason: 'Folga', fullDay: true, slots: [] as string[], notes: '' },
+    },
+  );
+  const { isOpen: isBlockOpen, form: blockForm } = blockDraft;
+  const setIsBlockOpen = (open: boolean) => {
+    if (!open) {
+      clearBlockDraft();
+      return;
+    }
+    setBlockDraft(current => current.isOpen
+      ? current
+      : { ...current, isOpen: true, date: selectedDate });
+  };
+  const setBlockForm = (update: typeof blockForm | ((current: typeof blockForm) => typeof blockForm)) => {
+    setBlockDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
 
   const handleAddBlock = async (e: React.FormEvent) => {
     e.preventDefault();
     const resolvedBlockProfId = ownProfessionalId || blockForm.profId;
     if (!resolvedBlockProfId) { toast.error('Selecione o profissional'); return; }
     if (!await addBlock({
-      date: selectedDate,
+      date: blockDraft.date,
       professionalId: resolvedBlockProfId,
       reason: blockForm.reason,
       slots: blockForm.fullDay ? [] : blockForm.slots,
       notes: blockForm.notes
     })) return;
     toast.success('Horário bloqueado');
-    setIsBlockOpen(false);
+    clearBlockDraft();
   };
 
   const sendWhatsApp = (phone: string | undefined, a: typeof appointments[0]) => {
@@ -239,7 +310,7 @@ export default function Agenda() {
     try {
       await api.googleCalendar.deleteAppointment(appointment.id);
     } catch (error) {
-      toast.warning('Agendamento excluído do Barber Manager, mas pode continuar no Google Agenda.', {
+      toast.warning('Agendamento excluído do Beauty Manager, mas pode continuar no Google Agenda.', {
         description: error instanceof Error ? error.message : 'Não foi possível remover o evento do Google Agenda.',
       });
     }
@@ -347,28 +418,33 @@ export default function Agenda() {
   }[status]);
 
   return (
-    <div className="mx-auto flex min-h-[calc(100dvh-7rem)] max-w-7xl flex-col space-y-5 p-4 sm:p-5 md:h-[calc(100vh-6rem)] md:space-y-6 md:p-8">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <h2 className="text-xl font-bold text-foreground md:text-2xl">Agenda</h2>
-        <div className="flex flex-wrap items-center gap-3">
+    <div className="mx-auto flex min-h-[calc(100dvh-7rem)] max-w-7xl flex-col space-y-4 p-4 sm:space-y-5 sm:p-5 md:h-[calc(100vh-6rem)] md:space-y-6 md:p-8">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 md:gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-foreground md:text-2xl">Agenda</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+            Veja os horários do dia e acompanhe o andamento dos atendimentos.
+          </p>
+        </div>
+        <div className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap sm:gap-3">
            <button
              type="button"
              data-testid="button-sync-google-calendar"
              onClick={() => void syncCurrentMonthToGoogle()}
              disabled={isSyncingGoogle || isLoading}
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-brand-border bg-brand-surface px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-brand-border disabled:opacity-60"
+               className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-brand-border disabled:opacity-60 sm:w-auto sm:px-4"
            >
              <CalendarIcon className="w-4 h-4 text-brand-gold" />
              {isSyncingGoogle ? 'Sincronizando...' : 'Sincronizar mês'}
            </button>
-            <select disabled={ownProfile} value={effectiveFilterProf} onChange={e => setFilterProf(e.target.value)} className="min-h-11 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none disabled:opacity-60">
+             <select disabled={ownProfile} value={effectiveFilterProf} onChange={e => setFilterProf(e.target.value)} className="col-span-2 min-h-11 w-full min-w-0 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-1 focus:ring-brand-gold outline-none disabled:opacity-60 sm:col-span-1 sm:w-auto">
             <option value="">Todos Profissionais</option>
             {activeProfs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           
           <Dialog open={isBlockOpen} onOpenChange={setIsBlockOpen}>
             <DialogTrigger asChild>
-              <button className="min-h-11 bg-brand-surface border border-brand-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-border transition-colors">
+               <button className="min-h-11 w-full bg-brand-surface border border-brand-border text-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-brand-border transition-colors sm:w-auto sm:px-4">
                 Bloquear Horário
               </button>
             </DialogTrigger>
@@ -394,7 +470,10 @@ export default function Agenda() {
                 </div>
                 {!blockForm.fullDay && (
                   <div>
-                    <label className="text-xs font-semibold text-muted-foreground uppercase">Horários</label>
+                      <div className="flex items-center gap-1">
+                        <label className="text-xs font-semibold text-muted-foreground uppercase">Horários</label>
+                        <FeatureInfo label="Selecionar horários">Use Ctrl no Windows ou Command no Mac para selecionar mais de um horário.</FeatureInfo>
+                      </div>
                     <div className="mt-2 grid max-h-48 grid-cols-3 gap-2 overflow-y-auto md:hidden">
                       {slots.map(slot => {
                         const selected = blockForm.slots.includes(slot);
@@ -424,7 +503,6 @@ export default function Agenda() {
                       <select multiple value={blockForm.slots} onChange={e => setBlockForm(f => ({ ...f, slots: Array.from(e.target.selectedOptions, o => o.value) }))} className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm outline-none h-32">
                         {slots.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
-                      <p className="mt-1 text-xs text-muted-foreground">Use Ctrl ou Command para selecionar mais de um horário.</p>
                     </div>
                   </div>
                 )}
@@ -435,7 +513,7 @@ export default function Agenda() {
 
           <Dialog open={isApptOpen} onOpenChange={setIsApptOpen}>
             <DialogTrigger asChild>
-            <button className="min-h-11 bg-brand-gold text-brand-bg px-4 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2 transition-all">
+            <button className="min-h-11 w-full justify-center bg-brand-gold text-brand-bg px-3 py-2 rounded-lg text-sm font-bold hover:bg-brand-gold/90 flex items-center gap-2 transition-all sm:w-auto sm:px-4">
                 <Plus className="w-4 h-4" /> Novo Agendamento
               </button>
             </DialogTrigger>

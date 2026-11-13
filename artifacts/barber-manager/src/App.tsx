@@ -18,6 +18,7 @@ import { AuthProvider, useAuth } from '@/auth/auth';
 import { SplashScreen } from '@/components/SplashScreen';
 import { Layout } from '@/components/Layout';
 import { ThemeProvider, useTheme } from '@/components/theme-provider';
+import { FormDraftProvider } from '@/data/form-drafts';
 
 // Pages
 import Login from '@/pages/login';
@@ -62,7 +63,9 @@ function MainRouter() {
   const isInviteRoute = location.startsWith('/convite/');
   const hasInviteContext = isInviteRoute || Boolean(new URLSearchParams(window.location.search).get('convite'));
 
-  if (loading && !hasInviteContext) {
+  const authValidationOverlay = loading && !hasInviteContext && Boolean(session && profile);
+
+  if (loading && !hasInviteContext && (!session || !profile)) {
     return <SplashScreen message="Verificando seu acesso..." />;
   }
 
@@ -90,65 +93,80 @@ function MainRouter() {
   // Public/Unwrapped routes
   if (location === '/login' || location === '/cadastro' || isPasswordRecoveryRoute || isAccountConfirmationRoute) {
     return (
-      <Switch>
-        <Route path="/login" component={Login} />
-        <Route path="/cadastro" component={Cadastro} />
-        <Route path="/conta-verificada" component={ContaVerificada} />
-        <Route path="/esqueci-senha" component={EsqueciSenha} />
-        <Route path="/redefinir-senha" component={RedefinirSenha} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/login" component={Login} />
+          <Route path="/cadastro" component={Cadastro} />
+          <Route path="/conta-verificada" component={ContaVerificada} />
+          <Route path="/esqueci-senha" component={EsqueciSenha} />
+          <Route path="/redefinir-senha" component={RedefinirSenha} />
+        </Switch>
+      </PageTransition>
     );
   }
 
   if (location === '/onboarding') {
     return (
-      <Switch>
-        <Route path="/onboarding" component={Onboarding} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/onboarding" component={Onboarding} />
+        </Switch>
+      </PageTransition>
     );
   }
 
   if (isJoinRequestRoute) {
     return (
-      <Switch>
-        <Route path="/solicitar-acesso" component={SolicitarAcesso} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/solicitar-acesso" component={SolicitarAcesso} />
+        </Switch>
+      </PageTransition>
     );
   }
 
   if (isInviteRoute) {
     return (
-      <Switch>
-        <Route path="/convite/:token" component={Convite} />
-      </Switch>
+      <PageTransition locationKey={location}>
+        <Switch>
+          <Route path="/convite/:token" component={Convite} />
+        </Switch>
+      </PageTransition>
     );
   }
 
   // Wrapped main app routes
   return (
     <>
-      <Layout>
-        <RoutedErrorBoundary>
-          <PageTransition locationKey={location}>
-            <Switch>
-              <Route path="/" component={Dashboard} />
-              <Route path="/dashboard" component={Dashboard} />
-              <Route path="/controle" component={Controle} />
-              <Route path="/agenda" component={Agenda} />
-              <Route path="/clientes" component={Clientes} />
-              <Route path="/profissionais" component={Profissionais} />
-              <Route path="/produtos" component={Produtos} />
-              <Route path="/planos" component={Planos} />
-              <Route path="/financeiro" component={Financeiro} />
-              <Route path="/comunicacao" component={Comunicacao} />
-              <Route path="/perfil" component={Perfil} />
-              <Route path="/configuracoes/:section" component={Configuracoes} />
-              <Route path="/configuracoes" component={Configuracoes} />
-              <Route component={NotFound} />
-            </Switch>
-          </PageTransition>
-        </RoutedErrorBoundary>
-      </Layout>
+      <div
+        aria-hidden={authValidationOverlay || undefined}
+        inert={authValidationOverlay || undefined}
+        style={authValidationOverlay ? { visibility: 'hidden' } : undefined}
+      >
+        <Layout>
+          <RoutedErrorBoundary>
+            <PageTransition locationKey={location}>
+              <Switch>
+                <Route path="/" component={Dashboard} />
+                <Route path="/dashboard" component={Dashboard} />
+                <Route path="/controle" component={Controle} />
+                <Route path="/agenda" component={Agenda} />
+                <Route path="/clientes" component={Clientes} />
+                <Route path="/profissionais" component={Profissionais} />
+                <Route path="/produtos" component={Produtos} />
+                <Route path="/planos" component={Planos} />
+                <Route path="/financeiro" component={Financeiro} />
+                <Route path="/comunicacao" component={Comunicacao} />
+                <Route path="/perfil" component={Perfil} />
+                <Route path="/configuracoes/:section" component={Configuracoes} />
+                <Route path="/configuracoes" component={Configuracoes} />
+                <Route component={NotFound} />
+              </Switch>
+            </PageTransition>
+          </RoutedErrorBoundary>
+        </Layout>
+      </div>
+      {authValidationOverlay && <SplashScreen message="Validando seu acesso..." overlay />}
       {session && profile?.role && dataLoading && (
         <SplashScreen message="Sincronizando seus dados..." overlay />
       )}
@@ -165,7 +183,9 @@ function AppContent() {
         <AuthProvider>
           <AppStoreProvider>
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-              <MainRouter />
+              <FormDraftProvider>
+                <MainRouter />
+              </FormDraftProvider>
             </WouterRouter>
             <Toaster
               position="top-center"

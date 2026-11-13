@@ -47,22 +47,24 @@ test.describe('mensalidades presenciais', () => {
     await openModule(page, '/planos', 'Planos Disponíveis');
     await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
     let dialog = page.getByRole('dialog');
-    await dialog.locator('input').nth(0).fill(planName);
-    await dialog.locator('input').nth(1).fill('149');
-    await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
-    await dialog.locator('input').nth(2).fill('4');
+    await dialog.getByTestId('input-plan-name').fill(planName);
+    await dialog.getByTestId('input-plan-price').fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
+    await dialog.getByTestId('select-plan-duration').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-uses-0').fill('4');
     await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
-    await expect(page.getByText(planName, { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-testid^="mobile-plan-card-"]').filter({ hasText: planName })).toBeVisible();
 
     async function addSubscriberByTyping() {
       await page.getByRole('button', { name: 'Adicionar Assinante', exact: true }).click();
       dialog = page.getByRole('dialog');
       await dialog.getByTestId('input-subscriber-client-name').fill(clientName);
       await dialog.getByTestId('input-subscriber-client-phone').fill(phone);
-      await dialog.locator('select').nth(0).selectOption({ label: planName });
-      await dialog.locator('input[type="date"]').fill(today());
+      await dialog.getByTestId('select-subscriber-plan').selectOption({ label: planName });
+      await dialog.getByTestId('input-subscriber-start-date').fill(today());
       await dialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
-      await expect(page.locator('tbody tr').filter({ hasText: clientName }).first()).toBeVisible();
+      await expect(page.getByTestId('subscriber-row').filter({ hasText: clientName })).toBeVisible();
       await settleMutation(page);
     }
 
@@ -71,20 +73,268 @@ test.describe('mensalidades presenciais', () => {
 
     await openModule(page, '/clientes', 'Clientes');
     await page.getByPlaceholder('Buscar por nome, email ou whatsapp...').fill(clientName);
-    await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('row').filter({ hasText: clientName })).toBeVisible();
 
     await openModule(page, '/planos', 'Planos Disponíveis');
     await page.getByRole('button', { name: 'Adicionar Assinante', exact: true }).click();
     dialog = page.getByRole('dialog');
     await dialog.getByTestId('input-subscriber-client-search').fill(clientName);
-    await dialog.getByRole('button').filter({ hasText: clientName }).first().click();
+    await dialog.locator('[data-testid^="button-select-subscriber-client-"]').filter({ hasText: clientName }).click();
     await expect(dialog.getByTestId('input-subscriber-client-name')).toHaveValue(clientName);
     await expect(dialog.getByTestId('input-subscriber-client-phone')).toHaveValue(phone);
-    await dialog.locator('select').nth(0).selectOption({ label: planName });
-    await dialog.locator('input[type="date"]').fill(today());
+    await dialog.getByTestId('select-subscriber-plan').selectOption({ label: planName });
+    await dialog.getByTestId('input-subscriber-start-date').fill(today());
     await dialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
-    await expect(page.locator('tbody tr').filter({ hasText: clientName })).toHaveCount(2);
+    await expect(page.getByTestId('subscriber-row').filter({ hasText: clientName })).toHaveCount(2);
     expect(clientCreateRequests).toBe(1);
+  });
+
+  test('atribui plano no Controle Diário e só libera usos após confirmar pagamento', async ({ page }) => {
+    const planName = uniqueName('Plano atribuído no controle E2E');
+    const clientName = uniqueName('Cliente do controle E2E');
+    const phone = uniqueClientPhone();
+
+    await openModule(page, '/planos', 'Planos Disponíveis');
+    await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByTestId('input-plan-name').fill(planName);
+    await dialog.getByTestId('input-plan-price').fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
+    await dialog.getByTestId('select-plan-duration').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-uses-0').fill('4');
+    await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
+    await expect(page.locator('[data-testid^="mobile-plan-card-"]').filter({ hasText: planName })).toBeVisible();
+
+    await openModule(page, '/controle', 'Controle Diário');
+    const form = page.locator('form').filter({ has: page.getByTestId('button-save-attendance') });
+    await form.getByTestId('input-attendance-client-name').fill(clientName);
+    await form.getByTestId('input-attendance-client-phone').fill(phone);
+    await form.getByRole('button', { name: 'Atribuir plano neste registro' }).click();
+    const assignmentPlanSelect = form.getByTestId('select-assign-plan');
+    const assignmentPlanOption = assignmentPlanSelect.locator('option').filter({ hasText: planName });
+    await assignmentPlanSelect.selectOption((await assignmentPlanOption.getAttribute('value'))!);
+    const createSubscriber = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/subscribers') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-assign-plan').click();
+    await createSubscriber;
+    await expect(form.getByTestId('select-attendance-plan')).not.toContainText(clientName);
+
+    await form.getByRole('button', { name: 'Atribuir plano neste registro' }).click();
+    const paymentPlanSelect = form.getByTestId('select-assign-plan');
+    const paymentPlanOption = paymentPlanSelect.locator('option').filter({ hasText: planName });
+    await paymentPlanSelect.selectOption((await paymentPlanOption.getAttribute('value'))!);
+    await form.getByLabel('O cliente já pagou a mensalidade').check();
+    const recordPayment = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/rpc/set_subscription_payment_status') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-assign-plan').click();
+    await recordPayment;
+    const planForAttendance = form.getByTestId('select-attendance-plan');
+    await expect(planForAttendance.locator('option').filter({ hasText: clientName })).toHaveCount(1);
+    const subscriberId = await planForAttendance.locator('option').filter({ hasText: clientName }).getAttribute('value');
+    expect(subscriberId).toBeTruthy();
+
+    const professionalSelect = form.getByTestId('select-attendance-professional');
+    const professionalId = await professionalSelect.locator('option').evaluateAll(options =>
+      options.find(option => Boolean(option.getAttribute('value')))?.getAttribute('value'),
+    );
+    expect(professionalId).toBeTruthy();
+    await professionalSelect.selectOption(professionalId!);
+    await form.getByTestId('input-attendance-service-description').fill('Atendimento do plano');
+
+    const createAppointment = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/appointments') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-save-attendance').click();
+    const appointmentResponse = await createAppointment;
+    const appointment = await appointmentResponse.json() as {
+      plan_subscriber_id: string | null;
+      professional_id: string;
+      service_id: string | null;
+      service_description: string | null;
+      plan_usage_value: number;
+      service_commission_rate_snapshot: number;
+      value: number;
+    };
+    expect(appointment.plan_subscriber_id).toBe(subscriberId);
+    expect(appointment.professional_id).toBe(professionalId);
+    expect(appointment.service_id).toBeTruthy();
+    expect(appointment.service_description).toBe('Atendimento do plano');
+    expect(appointment.plan_usage_value).toBe(18.63);
+    expect(appointment.service_commission_rate_snapshot).toBe(1);
+    expect(appointment.value).toBe(0);
+  });
+
+  test('cria plano e atribui assinante direto no Controle Diário', async ({ page }) => {
+    const planName = uniqueName('Plano criado no controle E2E');
+    const clientName = uniqueName('Assinante criado no controle E2E');
+    const phone = uniqueClientPhone();
+
+    if (!accounts.reception) {
+      test.skip(true, 'Requires the isolated E2E reception account.');
+      return;
+    }
+    await page.getByRole('button', { name: 'Sair do sistema', exact: true }).click();
+    await expect(page.getByLabel('E-mail')).toBeVisible();
+    await loginAs(page, accounts.reception);
+
+    await openModule(page, '/controle', 'Controle Diário');
+    const form = page.locator('form').filter({ has: page.getByTestId('button-save-attendance') });
+    await form.getByTestId('input-attendance-client-name').fill(clientName);
+    await form.getByTestId('input-attendance-client-phone').fill(phone);
+    await form.getByTestId('button-create-plan-in-daily-control').click();
+
+    await form.getByTestId('input-daily-plan-name').fill(planName);
+    await form.getByTestId('input-daily-plan-price').fill('149');
+    await form.locator('#daily-plan-salon-share').fill('50');
+    await form.getByTestId('select-daily-plan-service-0').selectOption({ index: 1 });
+    await form.getByTestId('input-daily-plan-uses-0').fill('4');
+
+    const createPlan = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/subscription_plans') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-save-daily-plan').click();
+    const planResponse = await createPlan;
+    const createdPlan = await planResponse.json() as { id: string };
+    expect(createdPlan.id).toBeTruthy();
+
+    const assignmentPlanSelect = form.getByTestId('select-assign-plan');
+    await expect(assignmentPlanSelect).toHaveValue(createdPlan.id);
+    await expect(assignmentPlanSelect).toContainText(planName);
+    await form.getByLabel('O cliente já pagou a mensalidade').check();
+
+    const createSubscriber = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/subscribers') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    const confirmPayment = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/rpc/set_subscription_payment_status') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-assign-plan').click();
+    await Promise.all([createSubscriber, confirmPayment]);
+
+    const planForAttendance = form.getByTestId('select-attendance-plan');
+    await expect(planForAttendance.locator('option').filter({ hasText: clientName })).toHaveCount(1);
+    const subscriberId = await planForAttendance.locator('option').filter({ hasText: clientName }).getAttribute('value');
+    expect(subscriberId).toBeTruthy();
+
+    const professionalSelect = form.getByTestId('select-attendance-professional');
+    const professionalId = await professionalSelect.locator('option').evaluateAll(options =>
+      options.find(option => Boolean(option.getAttribute('value')))?.getAttribute('value'),
+    );
+    expect(professionalId).toBeTruthy();
+    await professionalSelect.selectOption(professionalId!);
+    await form.getByTestId('input-attendance-service-description').fill('Uso do plano criado no Controle Diário');
+
+    const createAppointment = page.waitForResponse(response =>
+      response.url().includes('/rest/v1/appointments') &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+    );
+    await form.getByTestId('button-save-attendance').click();
+    const appointmentResponse = await createAppointment;
+    const appointment = await appointmentResponse.json() as { plan_subscriber_id: string | null };
+    expect(appointment.plan_subscriber_id).toBe(subscriberId);
+
+    await page.reload();
+    await openModule(page, '/planos', 'Planos Disponíveis');
+    const planCard = page.getByTestId(`mobile-plan-card-${createdPlan.id}`);
+    await expect(planCard).toBeVisible();
+    await expect(planCard).toContainText(planName);
+    await expect(page.getByTestId('subscriber-row').filter({ hasText: clientName })).toBeVisible();
+  });
+
+  test('mostra recebimentos pagos no dashboard, financeiro e controle diário', async ({ page }) => {
+    const planName = uniqueName('Plano recebimentos E2E');
+    const paidSubscriber = uniqueName('Assinante pago nos relatórios E2E');
+    const pendingSubscriber = uniqueName('Assinante pendente nos relatórios E2E');
+
+    await openModule(page, '/planos', 'Planos Disponíveis');
+    await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.getByTestId('input-plan-name').fill(planName);
+    await dialog.getByTestId('input-plan-price').fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
+    await dialog.getByTestId('select-plan-duration').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-uses-0').fill('4');
+    await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
+    await expect(page.locator('[data-testid^="mobile-plan-card-"]').filter({ hasText: planName })).toBeVisible();
+    await settleMutation(page);
+
+    async function createSubscriber(name: string) {
+      await page.getByRole('button', { name: 'Adicionar Assinante', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByTestId('input-subscriber-client-name').fill(name);
+      await dialog.getByTestId('input-subscriber-client-phone').fill(uniqueClientPhone());
+      await dialog.getByTestId('select-subscriber-plan').selectOption({ label: planName });
+      await dialog.getByTestId('input-subscriber-start-date').fill(today());
+      await dialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
+      const row = page.getByTestId('subscriber-row').filter({ hasText: name });
+      await expect(row).toBeVisible();
+      await settleMutation(page);
+      return row;
+    }
+
+    async function registerPayment(
+      row: ReturnType<typeof page.locator>,
+      name: string,
+      status: 'pago' | 'pendente',
+    ) {
+      await row.getByRole('button', { name: `Registrar mensalidade de ${name}`, exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByTestId('select-subscription-payment-status').selectOption(status);
+      await dialog.getByTestId('input-subscription-payment-amount').fill('149');
+      if (status === 'pago') {
+        await dialog.getByTestId('input-subscription-payment-paid-at').fill(today());
+        await dialog.getByTestId('select-subscription-payment-method').selectOption('pix');
+      }
+      await dialog.getByTestId('input-subscription-payment-note').fill(`E2E ${status}`);
+      const response = page.waitForResponse(response =>
+        response.url().includes('/rest/v1/rpc/set_subscription_payment_status') &&
+        response.request().method() === 'POST' &&
+        response.ok(),
+      );
+      await dialog.getByRole('button', { name: 'Salvar controle presencial', exact: true }).click();
+      await response;
+      await expect(dialog).toBeHidden();
+    }
+
+    const paidRow = await createSubscriber(paidSubscriber);
+    await registerPayment(paidRow, paidSubscriber, 'pago');
+    const pendingRow = await createSubscriber(pendingSubscriber);
+    await registerPayment(pendingRow, pendingSubscriber, 'pendente');
+
+    await openModule(page, '/dashboard', 'Visão geral');
+    const dashboardReceipts = page.getByTestId('dashboard-plan-receipts');
+    await expect(dashboardReceipts).toContainText(paidSubscriber);
+    await expect(dashboardReceipts).toContainText('149,00');
+    await expect(dashboardReceipts).not.toContainText(pendingSubscriber);
+
+    await openModule(page, '/financeiro', 'Financeiro');
+    const financeReceipts = page.getByTestId('finance-plan-receipts');
+    await expect(financeReceipts.getByTestId('finance-plan-receipt').filter({ hasText: paidSubscriber })).toBeVisible();
+    await expect(financeReceipts).toContainText('PIX');
+    await expect(financeReceipts).not.toContainText(pendingSubscriber);
+
+    await openModule(page, '/controle', 'Controle Diário');
+    const paidMovement = page.getByTestId('daily-subscription-movement').filter({ hasText: paidSubscriber }).first();
+    await expect(paidMovement).toBeVisible();
+    await expect(paidMovement).toContainText('149,00');
+    await expect(page.getByTestId('daily-subscription-movement').filter({ hasText: pendingSubscriber })).toHaveCount(0);
   });
 
   test('mantém pagamentos, vencimento e estados após recarregar', async ({ page }) => {
@@ -101,12 +351,14 @@ test.describe('mensalidades presenciais', () => {
 
     await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
     let dialog = page.getByRole('dialog');
-    await dialog.locator('input').nth(0).fill(planName);
-    await dialog.locator('input').nth(1).fill('149');
-    await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
-    await dialog.locator('input').nth(2).fill('4');
+    await dialog.getByTestId('input-plan-name').fill(planName);
+    await dialog.getByTestId('input-plan-price').fill('149');
+    await dialog.getByTestId('plan-salon-share-percent').fill('50');
+    await dialog.getByTestId('select-plan-duration').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
+    await dialog.getByTestId('plan-service-uses-0').fill('4');
     await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
-    await expect(page.getByText(planName, { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-testid^="mobile-plan-card-"]').filter({ hasText: planName })).toBeVisible();
     await settleMutation(page);
 
     async function createSubscriber(name: string) {
@@ -116,10 +368,10 @@ test.describe('mensalidades presenciais', () => {
       dialog = page.getByRole('dialog');
       await dialog.getByTestId('input-subscriber-client-name').fill(name);
       await dialog.getByTestId('input-subscriber-client-phone').fill(phone);
-      await dialog.locator('select').nth(0).selectOption({ label: planName });
-      await dialog.locator('input[type="date"]').fill(today());
+      await dialog.getByTestId('select-subscriber-plan').selectOption({ label: planName });
+      await dialog.getByTestId('input-subscriber-start-date').fill(today());
       await dialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
-      const row = page.locator('tbody tr').filter({ hasText: name });
+      const row = page.getByTestId('subscriber-row').filter({ hasText: name });
       await expect(row).toBeVisible();
       await settleMutation(page);
       return row;
@@ -134,16 +386,16 @@ test.describe('mensalidades presenciais', () => {
     ) {
       await row.getByRole('button', { name: `Registrar mensalidade de ${name}`, exact: true }).click();
       dialog = page.getByRole('dialog');
-      await dialog.locator('select').nth(0).selectOption(status);
+      await dialog.getByTestId('select-subscription-payment-status').selectOption(status);
       if (dueDate) {
-        await dialog.locator('input[type="date"]').nth(0).fill(dueDate);
+        await dialog.getByTestId('input-subscription-payment-due-date').fill(dueDate);
       }
-      await dialog.locator('input[type="number"]').fill('149');
+      await dialog.getByTestId('input-subscription-payment-amount').fill('149');
       if (status === 'pago') {
-        await dialog.locator('input[type="date"]').nth(1).fill(today());
-        await dialog.locator('select').nth(1).selectOption('pix');
+        await dialog.getByTestId('input-subscription-payment-paid-at').fill(today());
+        await dialog.getByTestId('select-subscription-payment-method').selectOption('pix');
       }
-      await dialog.locator('textarea').fill(note);
+      await dialog.getByTestId('input-subscription-payment-note').fill(note);
       const response = page.waitForResponse(response =>
         response.url().includes('/rest/v1/rpc/set_subscription_payment_status') &&
         response.request().method() === 'POST' &&
@@ -156,49 +408,41 @@ test.describe('mensalidades presenciais', () => {
     }
 
     const paidRow = await createSubscriber(paidSubscriber);
-    const initialDue = await paidRow.locator('td').nth(2).textContent();
+    const initialDue = await paidRow.getByTestId('subscriber-next-payment-date').textContent();
     await registerPayment(paidRow, paidSubscriber, 'pago', paidNote);
-    const advancedDue = await paidRow.locator('td').nth(2).textContent();
+    const advancedDue = await paidRow.getByTestId('subscriber-next-payment-date').textContent();
     expect(advancedDue).not.toBe(initialDue);
 
     const history = page.locator('section').filter({ hasText: 'Histórico presencial' });
-    const paidEntry = history
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const paidEntry = history.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Paga' });
     await expect(paidEntry).toBeVisible();
     await expect(paidEntry.getByText('Paga', { exact: true })).toBeVisible();
     await expect(paidEntry.getByText('PIX', { exact: true })).toBeVisible();
     await expect(paidEntry.getByText(/R\$\s*149,00/)).toBeVisible();
     await expect(paidEntry.getByText(paidNote, { exact: true })).toBeVisible();
-    const pendingEntry = history
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const pendingEntry = history.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Pendente' });
     await expect(pendingEntry).toBeVisible();
     await expect(pendingEntry.getByText(/Vencimento:/)).toHaveText(`Vencimento: ${advancedDue?.trim()}`);
 
     await page.reload();
     await expect(page.locator('main h2').filter({ hasText: 'Planos Disponíveis' })).toBeVisible();
-    const reloadedPaidRow = page.locator('tbody tr').filter({ hasText: paidSubscriber });
+    const reloadedPaidRow = page.getByTestId('subscriber-row').filter({ hasText: paidSubscriber });
     await expect(reloadedPaidRow).toBeVisible();
-    await expect(reloadedPaidRow.locator('td').nth(2)).not.toHaveText(initialDue ?? '');
+    await expect(reloadedPaidRow.getByTestId('subscriber-next-payment-date')).not.toHaveText(initialDue ?? '');
     const reloadedHistory = page.locator('section').filter({ hasText: 'Histórico presencial' });
-    const reloadedPaidEntry = reloadedHistory
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const reloadedPaidEntry = reloadedHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Paga' });
     await expect(reloadedPaidEntry).toBeVisible();
     await expect(reloadedPaidEntry.getByText(paidNote, { exact: true })).toBeVisible();
     await expect(reloadedPaidEntry.getByText('PIX', { exact: true })).toBeVisible();
     await expect(reloadedPaidEntry.getByText(/R\$\s*149,00/)).toBeVisible();
-    const reloadedPendingEntry = reloadedHistory
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const reloadedPendingEntry = reloadedHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Pendente' });
     await expect(reloadedPendingEntry).toBeVisible();
     await expect(reloadedPendingEntry.getByText(/Vencimento:/)).toHaveText(`Vencimento: ${advancedDue?.trim()}`);
@@ -213,34 +457,26 @@ test.describe('mensalidades presenciais', () => {
       toDateInputValue(initialDue?.trim() ?? ''),
     );
     const retriedHistory = page.locator('section').filter({ hasText: 'Histórico presencial' });
-    const retriedPaidEntries = retriedHistory
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const retriedPaidEntries = retriedHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Paga' });
-    const retriedPendingEntries = retriedHistory
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const retriedPendingEntries = retriedHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Pendente' });
     await expect(retriedPaidEntries).toHaveCount(1);
     await expect(retriedPendingEntries).toHaveCount(1);
-    await expect(reloadedPaidRow.locator('td').nth(2)).toHaveText(advancedDue?.trim() ?? '');
+    await expect(reloadedPaidRow.getByTestId('subscriber-next-payment-date')).toHaveText(advancedDue?.trim() ?? '');
 
     await page.reload();
     await expect(page.locator('main h2').filter({ hasText: 'Planos Disponíveis' })).toBeVisible();
-    const persistedPaidRow = page.locator('tbody tr').filter({ hasText: paidSubscriber });
-    await expect(persistedPaidRow.locator('td').nth(2)).toHaveText(advancedDue?.trim() ?? '');
+    const persistedPaidRow = page.getByTestId('subscriber-row').filter({ hasText: paidSubscriber });
+    await expect(persistedPaidRow.getByTestId('subscriber-next-payment-date')).toHaveText(advancedDue?.trim() ?? '');
     const persistedHistory = page.locator('section').filter({ hasText: 'Histórico presencial' });
-    const persistedPaidEntries = persistedHistory
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const persistedPaidEntries = persistedHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Paga' });
-    const persistedPendingEntries = persistedHistory
-      .getByText(paidSubscriber, { exact: true })
-      .locator('..')
-      .locator('..')
+    const persistedPendingEntries = persistedHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: paidSubscriber })
       .filter({ hasText: 'Pendente' });
     await expect(persistedPaidEntries).toHaveCount(1);
     await expect(persistedPendingEntries).toHaveCount(1);
@@ -249,10 +485,8 @@ test.describe('mensalidades presenciais', () => {
     await registerPayment(pendingRow, pendingSubscriber, 'pendente', pendingNote);
     await page.reload();
     const pendingHistory = page.locator('section').filter({ hasText: 'Histórico presencial' });
-    const reloadedPendingSubscriberEntry = pendingHistory
-      .getByText(pendingSubscriber, { exact: true })
-      .locator('..')
-      .locator('..');
+    const reloadedPendingSubscriberEntry = pendingHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: pendingSubscriber });
     await expect(reloadedPendingSubscriberEntry).toBeVisible();
     await expect(reloadedPendingSubscriberEntry.getByText('Pendente', { exact: true })).toBeVisible();
     await expect(reloadedPendingSubscriberEntry.getByText(pendingNote, { exact: true })).toBeVisible();
@@ -261,16 +495,14 @@ test.describe('mensalidades presenciais', () => {
     await registerPayment(overdueRow, overdueSubscriber, 'vencido', overdueNote);
     await page.reload();
     const overdueHistory = page.locator('section').filter({ hasText: 'Histórico presencial' });
-    const overdueEntry = overdueHistory
-      .getByText(overdueSubscriber, { exact: true })
-      .locator('..')
-      .locator('..');
+    const overdueEntry = overdueHistory.getByTestId('subscription-payment-history-entry')
+      .filter({ hasText: overdueSubscriber });
     await expect(overdueEntry).toBeVisible();
     await expect(overdueEntry.getByText('Vencida', { exact: true })).toBeVisible();
     await expect(overdueEntry.getByText(overdueNote, { exact: true })).toBeVisible();
 
     for (const subscriber of [paidSubscriber, pendingSubscriber, overdueSubscriber]) {
-      const row = page.locator('tbody tr').filter({ hasText: subscriber });
+      const row = page.getByTestId('subscriber-row').filter({ hasText: subscriber });
       await row.getByRole('button', { name: `Excluir assinante ${subscriber}`, exact: true }).click();
       await page.getByRole('alertdialog').getByRole('button', { name: 'Excluir', exact: true }).click();
       await expect(page.getByText(subscriber, { exact: true })).toHaveCount(0);
@@ -319,13 +551,14 @@ test.describe('mensalidades presenciais', () => {
     async function createPlan(name: string, duration: 'Mensal' | 'Anual') {
       await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.locator('input').nth(0).fill(name);
-      await dialog.locator('input').nth(1).fill('149');
-      await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
-      await dialog.locator('input').nth(2).fill('4');
-      await dialog.getByRole('combobox').nth(1).selectOption({ label: duration });
+      await dialog.getByTestId('input-plan-name').fill(name);
+      await dialog.getByTestId('input-plan-price').fill('149');
+      await dialog.getByTestId('plan-salon-share-percent').fill('50');
+      await dialog.getByTestId('select-plan-duration').selectOption({ label: duration });
+      await dialog.getByTestId('plan-service-uses-0').fill('4');
+      await dialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
       await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
-      await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+      await expect(page.locator('[data-testid^="mobile-plan-card-"]').filter({ hasText: name })).toBeVisible();
       await settleMutation(page);
     }
 
@@ -347,13 +580,13 @@ test.describe('mensalidades presenciais', () => {
       const dialog = page.getByRole('dialog');
       await dialog.getByTestId('input-subscriber-client-name').fill(name);
       await dialog.getByTestId('input-subscriber-client-phone').fill(phone);
-      await dialog.locator('select').nth(0).selectOption({ label: planName });
-      await dialog.locator('input[type="date"]').fill(startDate);
+      await dialog.getByTestId('select-subscriber-plan').selectOption({ label: planName });
+      await dialog.getByTestId('input-subscriber-start-date').fill(startDate);
       await dialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
-      const row = page.locator('tbody tr').filter({ hasText: name });
+      const row = page.getByTestId('subscriber-row').filter({ hasText: name });
       await expect(row).toBeVisible();
       await settleMutation(page);
-      const dueDate = parseDisplayedDate((await row.locator('td').nth(2).textContent())?.trim() ?? '');
+      const dueDate = parseDisplayedDate((await row.getByTestId('subscriber-next-payment-date').textContent())?.trim() ?? '');
       return { name, dueDate };
     }
 
@@ -434,7 +667,7 @@ test.describe('mensalidades presenciais', () => {
     page.off('request', recordPaymentRequest);
 
     for (const { name } of createdSubscribers) {
-      await page.locator('tbody tr').filter({ hasText: name })
+      await page.getByTestId('subscriber-row').filter({ hasText: name })
         .getByRole('button', { name: `Excluir assinante ${name}`, exact: true }).click();
       await page.getByRole('alertdialog').getByRole('button', { name: 'Excluir', exact: true }).click();
       await expect(page.getByText(name, { exact: true })).toHaveCount(0);
@@ -465,13 +698,14 @@ test.describe('mensalidades presenciais', () => {
     async function createPlan(name: string, duration: 'Mensal' | 'Trimestral') {
       await page.getByRole('button', { name: 'Novo Plano', exact: true }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.locator('input').nth(0).fill(name);
-      await dialog.locator('input').nth(1).fill('149');
-      await dialog.getByRole('combobox').nth(0).selectOption({ index: 1 });
-      await dialog.locator('input').nth(2).fill('4');
-      await dialog.getByRole('combobox').nth(1).selectOption({ label: duration });
+      await dialog.getByTestId('input-plan-name').fill(name);
+      await dialog.getByTestId('input-plan-price').fill('149');
+      await dialog.getByTestId('plan-salon-share-percent').fill('50');
+      await dialog.getByTestId('select-plan-duration').selectOption({ label: duration });
+      await dialog.getByTestId('plan-service-uses-0').fill('4');
+      await dialog.getByTestId('plan-service-select-0').selectOption({ index: 1 });
       await dialog.getByRole('button', { name: 'Salvar Plano', exact: true }).click();
-      await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+      await expect(page.locator('[data-testid^="mobile-plan-card-"]').filter({ hasText: name })).toBeVisible();
       await settleMutation(page);
     }
 
@@ -481,11 +715,10 @@ test.describe('mensalidades presenciais', () => {
       const dialog = page.getByRole('dialog');
       await dialog.getByTestId('input-subscriber-client-name').fill(name);
       await dialog.getByTestId('input-subscriber-client-phone').fill(phone);
-      await dialog.locator('select').nth(0).selectOption({ label: planName });
-      await dialog.locator('select').nth(1).selectOption({ index: 1 });
-      await dialog.locator('input[type="date"]').fill(startDate);
+      await dialog.getByTestId('select-subscriber-plan').selectOption({ label: planName });
+      await dialog.getByTestId('input-subscriber-start-date').fill(startDate);
       await dialog.getByRole('button', { name: 'Salvar Assinante', exact: true }).click();
-      const row = page.locator('tbody tr').filter({ hasText: name });
+      const row = page.getByTestId('subscriber-row').filter({ hasText: name });
       await expect(row).toBeVisible();
       await settleMutation(page);
       return row;
@@ -494,10 +727,10 @@ test.describe('mensalidades presenciais', () => {
     async function registerPaidPayment(row: ReturnType<typeof page.locator>, name: string, amount: string) {
       await row.getByRole('button', { name: `Registrar mensalidade de ${name}`, exact: true }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.locator('select').nth(0).selectOption('pago');
-      await dialog.locator('input[type="number"]').fill(amount);
-      await dialog.locator('input[type="date"]').nth(1).fill(today());
-      await dialog.locator('select').nth(1).selectOption('pix');
+      await dialog.getByTestId('select-subscription-payment-status').selectOption('pago');
+      await dialog.getByTestId('input-subscription-payment-amount').fill(amount);
+      await dialog.getByTestId('input-subscription-payment-paid-at').fill(today());
+      await dialog.getByTestId('select-subscription-payment-method').selectOption('pix');
       const response = page.waitForResponse(response =>
         response.url().includes('/rest/v1/rpc/set_subscription_payment_status') &&
         response.request().method() === 'POST' &&
@@ -514,11 +747,11 @@ test.describe('mensalidades presenciais', () => {
 
     for (const monthlyCase of monthlyCases) {
       const row = await createSubscriber(monthlyCase.name, monthlyPlanName, `2026-01-${monthlyCase.day}`);
-      await expect(row.locator('td').nth(2)).toHaveText('28/02/2026');
+      await expect(row.getByTestId('subscriber-next-payment-date')).toHaveText('28/02/2026');
       await registerPaidPayment(row, monthlyCase.name, '149');
       // The SQL RPC receives the clamped February due date and calculates the
       // next valid cycle from that date.
-      await expect(row.locator('td').nth(2)).toHaveText('28/03/2026');
+      await expect(row.getByTestId('subscriber-next-payment-date')).toHaveText('28/03/2026');
     }
 
     const quarterlyRow = await createSubscriber(
@@ -526,17 +759,17 @@ test.describe('mensalidades presenciais', () => {
       quarterlyPlanName,
       quarterlyCase.startDate,
     );
-    await expect(quarterlyRow.locator('td').nth(2)).toHaveText(displayDate(quarterlyCase.initialDue));
+    await expect(quarterlyRow.getByTestId('subscriber-next-payment-date')).toHaveText(displayDate(quarterlyCase.initialDue));
     await registerPaidPayment(quarterlyRow, quarterlyCase.name, '149');
-    await expect(quarterlyRow.locator('td').nth(2)).toHaveText(displayDate(quarterlyCase.nextDue));
+    await expect(quarterlyRow.getByTestId('subscriber-next-payment-date')).toHaveText(displayDate(quarterlyCase.nextDue));
 
     for (const monthlyCase of monthlyCases) {
-      const row = page.locator('tbody tr').filter({ hasText: monthlyCase.name });
+      const row = page.getByTestId('subscriber-row').filter({ hasText: monthlyCase.name });
       await row.getByRole('button', { name: `Excluir assinante ${monthlyCase.name}`, exact: true }).click();
       await page.getByRole('alertdialog').getByRole('button', { name: 'Excluir', exact: true }).click();
       await expect(page.getByText(monthlyCase.name, { exact: true })).toHaveCount(0);
     }
-    await page.locator('tbody tr').filter({ hasText: quarterlyCase.name })
+    await page.getByTestId('subscriber-row').filter({ hasText: quarterlyCase.name })
       .getByRole('button', { name: `Excluir assinante ${quarterlyCase.name}`, exact: true }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Excluir', exact: true }).click();
     await expect(page.getByText(quarterlyCase.name, { exact: true })).toHaveCount(0);
