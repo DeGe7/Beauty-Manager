@@ -443,7 +443,7 @@ export interface AppStoreValue {
 
   // Plans
   plans: SubscriptionPlan[];
-  addPlan: (p: Omit<SubscriptionPlan, 'id'>) => Promise<boolean>;
+  addPlan: (p: Omit<SubscriptionPlan, 'id'>) => Promise<SubscriptionPlan | null>;
   updatePlan: (id: string, p: Partial<SubscriptionPlan>) => Promise<boolean>;
   removePlan: (id: string) => Promise<boolean>;
 
@@ -1146,9 +1146,10 @@ function ScopedAppStoreProvider({ children }: { children: ReactNode }) {
       () => api.plans.create(newP as unknown as Record<string, unknown>),
       'Erro ao salvar plano',
     );
-    if (!saved) return false;
-    setPlans(prev => [...prev, cast<SubscriptionPlan>(saved)]);
-    return true;
+    if (!saved) return null;
+    const plan = cast<SubscriptionPlan>(saved);
+    setPlans(prev => [...prev, plan]);
+    return plan;
   }, []);
 
   const updatePlan = useCallback(async (id: string, p: Partial<SubscriptionPlan>) => {
