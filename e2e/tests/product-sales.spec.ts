@@ -120,12 +120,16 @@ test.describe('vendas avulsas de produtos', () => {
     await page.getByTestId('product-sale-reversal-reason').fill('Cliente desistiu da compra');
     const reversalResponsePromise = page.waitForResponse(response =>
       response.url().includes('/rest/v1/rpc/reverse_product_sale') &&
-      response.request().method() === 'POST' &&
-      response.ok(),
+      response.request().method() === 'POST',
     );
     await confirmReversal.click();
     const reversalResponse = await reversalResponsePromise;
-    const reversedSale = await reversalResponse.json() as {
+    const reversalPayload = await reversalResponse.json().catch(() => null);
+    expect(
+      reversalResponse.ok(),
+      `reverse_product_sale returned ${reversalResponse.status()}: ${JSON.stringify(reversalPayload)}`,
+    ).toBe(true);
+    const reversedSale = reversalPayload as {
       id: string;
       total: number;
       date: string;
