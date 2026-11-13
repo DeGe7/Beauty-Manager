@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Package, Plus, Trash2, Edit2, Check, X, AlertTriangle, ArrowUp, CheckCircle2, ShoppingBag, Minus, ReceiptText, RotateCcw } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
+import { useTemporaryFormState } from '@/data/form-drafts';
 
 export default function Produtos() {
   const { products, clients, appointments, productSales, recordProductSale, reverseProductSale, addProduct, updateProduct, removeProduct, restock, isLoading } = useStore();
@@ -19,12 +20,7 @@ export default function Produtos() {
   const alertItems = products.filter(p => productStatus(p) !== 'ok').length;
   const prosthesisCount = products.filter(p => p.isProsthesisCapillary).length;
 
-  const [isAdding, setIsAdding] = useState(false);
-  const [showOnlyProsthesis, setShowOnlyProsthesis] = useState(false);
-  const visibleProducts = showOnlyProsthesis
-    ? products.filter(p => p.isProsthesisCapillary)
-    : products;
-  const [newP, setNewP] = useState({
+  const productInitialValues = {
     name: '',
     category: '',
     price: '',
@@ -32,7 +28,28 @@ export default function Produtos() {
     stock: '',
     minStock: '',
     isProsthesisCapillary: false,
-  });
+  };
+  const [productCreateDraft, setProductCreateDraft, clearProductCreateDraft] = useTemporaryFormState(
+    'product-create',
+    'produtos',
+    { isOpen: false, form: productInitialValues },
+  );
+  const isAdding = productCreateDraft.isOpen;
+  const setIsAdding = (open: boolean) => {
+    if (!open) clearProductCreateDraft();
+    else setProductCreateDraft(current => ({ ...current, isOpen: true }));
+  };
+  const [showOnlyProsthesis, setShowOnlyProsthesis] = useState(false);
+  const visibleProducts = showOnlyProsthesis
+    ? products.filter(p => p.isProsthesisCapillary)
+    : products;
+  const newP = productCreateDraft.form;
+  const setNewP = (update: typeof newP | ((current: typeof newP) => typeof newP)) => {
+    setProductCreateDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,22 +67,24 @@ export default function Produtos() {
       stock, minStock, isActive: true, isProsthesisCapillary: newP.isProsthesisCapillary,
     })) return;
     toast.success('Produto adicionado');
-    setIsAdding(false);
-    setNewP({
-      name: '',
-      category: '',
-      price: '',
-      cost: '',
-      stock: '',
-      minStock: '',
-      isProsthesisCapillary: false,
-    });
+    clearProductCreateDraft();
   };
 
-  const [editingId, setEditingId] = useState<string|null>(null);
-  const [editForm, setEditForm] = useState<any>({});
-  const startEdit = (p: Product) => { setEditingId(p.id); setEditForm({ ...p }); };
-  const cancelEdit = () => { setEditingId(null); };
+  const [productEditDraft, setProductEditDraft, clearProductEditDraft] = useTemporaryFormState(
+    'product-edit',
+    'produtos',
+    { editingId: null as string | null, form: {} as any },
+  );
+  const editingId = productEditDraft.editingId;
+  const editForm = productEditDraft.form;
+  const setEditForm = (update: any) => {
+    setProductEditDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
+  const startEdit = (p: Product) => setProductEditDraft({ editingId: p.id, form: { ...p } });
+  const cancelEdit = () => clearProductEditDraft();
   const saveEdit = async () => {
     const price = Number(editForm.price);
     const cost = Number(editForm.cost);
@@ -83,19 +102,41 @@ export default function Produtos() {
       isProsthesisCapillary: Boolean(editForm.isProsthesisCapillary),
     })) return;
     toast.success('Salvo');
-    setEditingId(null);
+    clearProductEditDraft();
   };
 
   const [restockQs, setRestockQs] = useState<Record<string, string>>({});
   type SaleLine = { key: number; productId: string; quantity: string; discountType: ProductSaleDiscountType; discountValue: string };
   const lineKey = useRef(1);
-  const [saleClientId, setSaleClientId] = useState('');
-  const [saleAppointmentId, setSaleAppointmentId] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<PayMethod>('pix');
-  const [saleLines, setSaleLines] = useState<SaleLine[]>([{ key: 1, productId: '', quantity: '1', discountType: 'amount', discountValue: '0' }]);
+  const [saleDraft, setSaleDraft, clearSaleDraft] = useTemporaryFormState(
+    'product-sale',
+    'produtos',
+    {
+      clientId: '',
+      appointmentId: '',
+      paymentMethod: 'pix' as PayMethod,
+      lines: [{ key: 1, productId: '', quantity: '1', discountType: 'amount', discountValue: '0' }] as SaleLine[],
+    },
+  );
+  const { clientId: saleClientId, appointmentId: saleAppointmentId, paymentMethod, lines: saleLines } = saleDraft;
+  const setSaleClientId = (clientId: string) => setSaleDraft(current => ({ ...current, clientId }));
+  const setSaleAppointmentId = (appointmentId: string) => setSaleDraft(current => ({ ...current, appointmentId }));
+  const setPaymentMethod = (nextMethod: PayMethod) => setSaleDraft(current => ({ ...current, paymentMethod: nextMethod }));
+  const setSaleLines = (update: SaleLine[] | ((current: SaleLine[]) => SaleLine[])) => {
+    setSaleDraft(current => ({
+      ...current,
+      lines: typeof update === 'function' ? update(current.lines) : update,
+    }));
+  };
   const [isSubmittingSale, setIsSubmittingSale] = useState(false);
-  const [selectedSaleId, setSelectedSaleId] = useState<string | null>(null);
-  const [reversalReason, setReversalReason] = useState('');
+  const [saleReversalDraft, setSaleReversalDraft, clearSaleReversalDraft] = useTemporaryFormState(
+    'product-sale-reversal',
+    'produtos',
+    { saleId: null as string | null, reason: '' },
+  );
+  const { saleId: selectedSaleId, reason: reversalReason } = saleReversalDraft;
+  const setSelectedSaleId = (saleId: string | null) => setSaleReversalDraft(current => ({ ...current, saleId }));
+  const setReversalReason = (reason: string) => setSaleReversalDraft(current => ({ ...current, reason }));
   const [isReversingSale, setIsReversingSale] = useState(false);
   const selectedSale = productSales.find(sale => sale.id === selectedSaleId);
   const selectableProducts = products.filter(product => product.isActive);
@@ -161,10 +202,7 @@ export default function Produtos() {
       });
       if (!saved) return;
       toast.success('Venda registrada');
-      setSaleClientId('');
-      setSaleAppointmentId('');
-      setPaymentMethod('pix');
-      setSaleLines([{ key: ++lineKey.current, productId: '', quantity: '1', discountType: 'amount', discountValue: '0' }]);
+      clearSaleDraft();
     } finally {
       setIsSubmittingSale(false);
     }
@@ -184,8 +222,7 @@ export default function Produtos() {
       const reversed = await reverseProductSale(selectedSale.id, reversalReason.trim());
       if (!reversed) return;
       toast.success('Estorno registrado. O estoque foi devolvido.');
-      setSelectedSaleId(null);
-      setReversalReason('');
+      clearSaleReversalDraft();
     } finally {
       setIsReversingSale(false);
     }
@@ -393,7 +430,7 @@ export default function Produtos() {
                   <button
                     type="button"
                     data-testid={`product-sale-reverse-${sale.id}`}
-                    onClick={() => { setSelectedSaleId(sale.id); setReversalReason(''); }}
+                    onClick={() => setSaleReversalDraft({ saleId: sale.id, reason: '' })}
                     className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-destructive/30 px-3 text-xs font-semibold text-destructive hover:bg-destructive/10"
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
@@ -409,10 +446,8 @@ export default function Produtos() {
       <AlertDialog
         open={Boolean(selectedSale)}
         onOpenChange={open => {
-          if (!open && !isReversingSale) {
-            setSelectedSaleId(null);
-            setReversalReason('');
-          }
+          if (!open && !isReversingSale) clearSaleReversalDraft();
+          else if (open) setSaleReversalDraft(current => ({ ...current, saleId: selectedSaleId }));
         }}
       >
         <AlertDialogContent className="border-brand-border bg-brand-surface text-foreground">
