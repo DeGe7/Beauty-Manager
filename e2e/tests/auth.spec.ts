@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+import { URL } from 'node:url';
 import { accounts, expect, invitationTokens, loginAs, requireAccount, test } from '../fixtures';
 
 async function mockValidInvitation(
@@ -24,6 +26,127 @@ async function mockValidInvitation(
       }),
     }),
   );
+}
+
+async function mockAvatarProfile(
+  page: Parameters<typeof loginAs>[0],
+  account: { email: string },
+  options: { failUpdate?: boolean } = {},
+) {
+  let previousAvatarPath = '';
+  await page.route('**/rest/v1/profiles?*', async route => {
+    const request = route.request();
+    if (request.method() === 'GET') {
+      const authorization = request.headers().authorization || '';
+      const encodedClaims = authorization.replace(/^Bearer\s+/i, '').split('.')[1] || '';
+      const decoder = globalThis as unknown as { atob(value: string): string };
+      const payload = encodedClaims.replace(/-/g, '+').replace(/_/g, '/');
+      const claims = JSON.parse(decoder.atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '='))) as { sub?: string };
+      const userId = String(claims.sub || '');
+      previousAvatarPath = `${userId}/old-avatar.png`;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        json: {
+          id: userId,
+          email: account.email,
+          full_name: 'Usuário E2E',
+          avatar_url: previousAvatarPath,
+        },
+      });
+    }
+    if (request.method() === 'PATCH') {
+      if (options.failUpdate) {
+        return route.fulfill({ status: 500, json: { message: 'profile update failed' } });
+      }
+      const update = request.postDataJSON() as { avatar_url: string };
+      return route.fulfill({ status: 200, json: { avatar_url: update.avatar_url } });
+    }
+    return route.continue();
+  });
+  return { previousAvatarPath: () => previousAvatarPath };
+}
+
+async function mockAvatarStorage(
+  page: Parameters<typeof loginAs>[0],
+  options: { failUpload?: boolean; failRemoval?: boolean } = {},
+) {
+  const removedPaths: string[][] = [];
+  const uploadedPaths: string[] = [];
+  await page.route('**/object/sign/avatars/**', route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/u5sAAAAASUVORK5CYII=', 'base64'),
+    }),
+  );
+  await page.route('**/storage/v1/object/**', async route => {
+    const request = route.request();
+    const requestUrl = request.url();
+    if (request.method() === 'DELETE' && requestUrl.endsWith('/storage/v1/object/avatars')) {
+      const body = request.postDataJSON() as { prefixes: string[] };
+      removedPaths.push(body.prefixes);
+      if (options.failRemoval) {
+        return route.fulfill({ status: 500, json: { message: 'avatar removal failed' } });
+      }
+      return route.fulfill({ status: 200, json: [] });
+    }
+    if (request.method() !== 'POST') return route.continue();
+    if (requestUrl.includes('/storage/v1/object/sign/avatars/')) {
+      const objectPath = decodeURIComponent(requestUrl.split('/storage/v1/object/sign/avatars/')[1].split('?')[0]);
+      return route.fulfill({
+        status: 200,
+        json: { signedURL: `/object/sign/avatars/${objectPath}?token=e2e` },
+      });
+    }
+    if (requestUrl.includes('/storage/v1/object/avatars/')) {
+      const objectPath = decodeURIComponent(requestUrl.split('/storage/v1/object/avatars/')[1].split('?')[0]);
+      if (options.failUpload) {
+        return route.fulfill({ status: 500, json: { message: 'upload failed' } });
+      }
+      uploadedPaths.push(objectPath);
+      return route.fulfill({ status: 200, json: { Key: `avatars/${objectPath}` } });
+    }
+    return route.continue();
+  });
+  return { removedPaths, uploadedPaths };
+}
+
+async function readStoredSupabaseSession(page: Parameters<typeof loginAs>[0]) {
+  return page.evaluate(() => {
+    const browser = globalThis as unknown as {
+      localStorage: {
+        length: number;
+        key(index: number): string | null;
+        getItem(key: string): string | null;
+      };
+      atob(value: string): string;
+    };
+    for (let index = 0; index < browser.localStorage.length; index += 1) {
+      const key = browser.localStorage.key(index);
+      if (!key) continue;
+      try {
+        const session = JSON.parse(browser.localStorage.getItem(key) || '') as {
+          access_token?: unknown;
+          user?: { id?: unknown };
+        };
+        if (typeof session.access_token !== 'string') continue;
+        const tokenPayload = session.access_token.split('.')[1];
+        if (!tokenPayload) continue;
+        const base64 = tokenPayload.replace(/-/g, '+').replace(/_/g, '/');
+        const claims = JSON.parse(
+          browser.atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')),
+        ) as { sub?: unknown };
+        const userId = typeof session.user?.id === 'string' ? session.user.id : claims.sub;
+        if (typeof userId === 'string') {
+          return { accessToken: session.access_token, userId };
+        }
+      } catch {
+        // Ignore unrelated local-storage entries.
+      }
+    }
+    return null;
+  });
 }
 
 test.describe('autenticação e onboarding', () => {
@@ -95,77 +218,76 @@ test.describe('autenticação e onboarding', () => {
     await expect(page.getByText('email-confirmation@example.com')).toBeVisible();
   });
 
-  test('cadastra por telefone e só tenta aceitar o convite após um código SMS válido', async ({ page }) => {
-    const invitationToken = 'convite-telefone-e2e';
-    let signupPhone = '';
-    let invitationAcceptanceCalls = 0;
-    await mockValidInvitation(page, 'phone');
+  test('cria conta de um salão sem convite e solicita confirmação por e-mail', async ({ page }) => {
+    let emailRedirectTo = '';
+    let signupPayload: { email?: string; data?: { full_name?: string } } = {};
     await page.route('**/auth/v1/signup**', async route => {
-      const payload = route.request().postDataJSON() as { phone?: string };
-      signupPhone = String(payload.phone ?? '');
+      const redirectMatch = route.request().url().match(/[?&]redirect_to=([^&]+)/);
+      emailRedirectTo = redirectMatch ? decodeURIComponent(redirectMatch[1]) : '';
+      signupPayload = route.request().postDataJSON() as typeof signupPayload;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           user: {
-            id: 'e2e-phone-user',
+            id: 'e2e-new-salon-owner',
             aud: 'authenticated',
             role: 'authenticated',
-            phone: signupPhone,
-            phone_confirmed_at: null,
-            user_metadata: { full_name: 'Profissional SMS' },
-            app_metadata: { provider: 'phone', providers: ['phone'] },
+            email: 'nova-proprietaria@example.test',
+            email_confirmed_at: null,
+            user_metadata: { full_name: 'Nova Proprietária' },
+            app_metadata: { provider: 'email', providers: ['email'] },
             identities: [],
           },
           session: null,
         }),
       });
     });
-    await page.route('**/auth/v1/verify**', async route => {
-      await route.fulfill({
-        status: 400,
-        contentType: 'application/json',
-        body: JSON.stringify({ code: 400, error_code: 'otp_expired', msg: 'Token has expired or is invalid' }),
-      });
-    });
-    await page.route('**/rest/v1/rpc/accept_organization_invitation', async route => {
-      invitationAcceptanceCalls += 1;
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-    });
 
-    await page.goto(`/cadastro?convite=${invitationToken}&canal=telefone`);
-    await page.getByLabel('Nome e sobrenome').fill('Profissional SMS');
-    await page.getByLabel('Telefone').fill('(11) 98765-4321');
-    await page.locator('#signup-password').fill('senha-e2e-123');
+    await page.goto('/cadastro');
+    await page.getByLabel('Nome e sobrenome').fill('Nova Proprietária');
+    await page.getByLabel('E-mail').fill('nova-proprietaria@example.test');
+    await page.getByLabel('Senha', { exact: true }).fill('senha-e2e-123');
     await page.getByLabel('Confirmar senha').fill('senha-e2e-123');
     await page.getByRole('button', { name: 'Cadastrar', exact: true }).click();
 
-    await expect.poll(() => signupPhone).toBe('+5511987654321');
-    await expect(page.getByLabel('Código SMS')).toBeVisible();
-    await page.getByLabel('Código SMS').fill('123456');
-    const verificationResponse = page.waitForResponse(response =>
-      response.url().includes('/auth/v1/verify') && response.request().method() === 'POST',
-    );
-    await page.getByRole('button', { name: 'Confirmar telefone e aceitar convite' }).click();
-    await verificationResponse;
-    expect(invitationAcceptanceCalls).toBe(0);
-    await expect(page.getByLabel('Código SMS')).toHaveValue('123456');
+    await expect(page).toHaveURL(/\/login$/);
+    expect(signupPayload.email).toBe('nova-proprietaria@example.test');
+    expect(signupPayload.data?.full_name).toBe('Nova Proprietária');
+    const pageOrigin = page.url().match(/^https?:\/\/[^/]+/)?.[0];
+    expect(emailRedirectTo).toBe(`${pageOrigin}/conta-verificada?confirmacao=email`);
   });
 
-  test('recupera senha por SMS sem permitir criação de conta', async ({ page }) => {
-    const capturedOtp: { payload?: { phone?: string; create_user?: boolean } } = {};
-    await page.route('**/auth/v1/otp**', async route => {
-      capturedOtp.payload = route.request().postDataJSON() as { phone?: string; create_user?: boolean };
+  test('convite legado por telefone explica que o novo acesso exige e-mail', async ({ page }) => {
+    const invitationToken = 'convite-telefone-legado-e2e';
+    await mockValidInvitation(page, 'phone');
+
+    await page.goto(`/cadastro?convite=${encodeURIComponent(invitationToken)}`);
+
+    await expect(page.getByRole('heading', { name: 'Convite não disponível', exact: true })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveText(
+      'Convites por telefone foram desativados. Peça ao Gestor/Proprietário para gerar um novo convite pelo seu e-mail.',
+    );
+    await expect(page.getByRole('button', { name: 'Cadastrar', exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Código SMS')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Ir para o login', exact: true })).toHaveAttribute('href', '/login');
+  });
+
+  test('recupera senha por e-mail sem permitir criação de conta', async ({ page }) => {
+    let recoveryEmail = '';
+    await page.route('**/auth/v1/recover**', async route => {
+      const payload = route.request().postDataJSON() as { email?: string };
+      recoveryEmail = String(payload.email ?? '');
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     });
 
-    await page.goto('/esqueci-senha?canal=telefone');
-    await page.getByLabel('Telefone da conta').fill('11 98765-4321');
-    await page.getByRole('button', { name: 'Enviar código SMS' }).click();
+    await page.goto('/esqueci-senha');
+    await page.getByLabel('E-mail da conta').fill('recuperacao@example.test');
+    await page.getByRole('button', { name: 'Enviar link de recuperação', exact: true }).click();
 
-    await expect(page.getByLabel('Código SMS')).toBeVisible();
-    expect(capturedOtp.payload?.phone).toBe('+5511987654321');
-    expect(capturedOtp.payload?.create_user).toBe(false);
+    await expect.poll(() => recoveryEmail).toBe('recuperacao@example.test');
+    await expect(page.getByText(/Se o endereço informado estiver cadastrado, enviaremos um link de recuperação/)).toBeVisible();
+    await expect(page.getByLabel('Código SMS')).toHaveCount(0);
   });
 
   test('confirma a conta somente após validar o retorno do Supabase e mantém o convite', async ({ page }) => {
@@ -254,14 +376,221 @@ test.describe('autenticação e onboarding', () => {
     await expect(page.getByRole('button', { name: 'Entrar', exact: true })).toBeVisible();
   });
 
-  test('redirects an unlinked session to onboarding without offering company creation', async ({ page }) => {
+  test('removes only the previous avatar after the new profile photo is confirmed', async ({ page }) => {
+    test.skip(!accounts.manager, 'Requires E2E_MANAGER_EMAIL and E2E_MANAGER_PASSWORD.');
+    const account = requireAccount(accounts.manager, 'manager');
+    const profileMock = await mockAvatarProfile(page, account);
+    const storageMock = await mockAvatarStorage(page);
+    await loginAs(page, account);
+    await page.goto('/perfil');
+
+    const photoInput = page.locator('input[type="file"]');
+    await expect(photoInput).toHaveAttribute('accept', 'image/*');
+    await expect(page.getByText('Todos os formatos de imagem, incluindo GIF · máximo de 2 MB')).toBeVisible();
+
+    await photoInput.setInputFiles('artifacts/barber-manager/public/favicon-32x32.png');
+    await page.getByRole('button', { name: 'Salvar alterações' }).click();
+    await expect(page.getByTestId('photo-save-feedback')).toHaveText('Foto de perfil atualizada.');
+    const previousAvatarPath = profileMock.previousAvatarPath();
+    expect(previousAvatarPath).toMatch(/^[^/]+\/old-avatar\.png$/);
+    await expect.poll(() => storageMock.removedPaths).toEqual([[previousAvatarPath]]);
+    expect(storageMock.uploadedPaths).toHaveLength(1);
+    expect(storageMock.uploadedPaths[0]).not.toBe(previousAvatarPath);
+    await expect(page.getByRole('img', { name: /^Foto de / })).toHaveAttribute(
+      'src',
+      new RegExp(`/object/sign/avatars/${profileMock.previousAvatarPath().split('/')[0]}/`),
+    );
+  });
+
+  test('uploads a real GIF to isolated storage and keeps it after reloading the profile', async ({ page }) => {
+    const projectUrl = process.env.E2E_SUPABASE_TEST_URL?.trim().replace(/\/+$/, '');
+    const anonKey = process.env.E2E_SUPABASE_TEST_ANON_KEY?.trim();
+    test.skip(
+      process.env.E2E_PROVISION !== 'true' || !projectUrl || !anonKey,
+      'Requires a disposable account and the isolated Supabase E2E project.',
+    );
+    const isolatedProjectUrl = projectUrl || '';
+    const isolatedAnonKey = anonKey || '';
+    expect(isolatedProjectUrl).not.toBe(
+      process.env.E2E_SUPABASE_PRODUCTION_URL?.trim().replace(/\/+$/, ''),
+    );
+
+    const account = requireAccount(accounts.manager, 'manager');
+    let uploadedPath = '';
+    await loginAs(page, account);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const storedSession = await readStoredSupabaseSession(page);
+    expect(storedSession, 'The disposable account session is required for safe test cleanup.')
+      .not.toBeNull();
+    const accessToken = storedSession?.accessToken || '';
+    const userId = storedSession?.userId || '';
+    const profileResponse = await page.request.get(
+      `${isolatedProjectUrl}/rest/v1/profiles?select=avatar_url&id=eq.${encodeURIComponent(userId)}`,
+      {
+        headers: {
+          apikey: isolatedAnonKey,
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+    expect(profileResponse.ok, 'The original test avatar must be readable before replacement.')
+      .toBeTruthy();
+    const profileRows = await profileResponse.json() as Array<{ avatar_url: string | null }>;
+    const originalAvatarUrl = profileRows[0]?.avatar_url ?? null;
+    const preservedAvatarRemovals: string[][] = [];
+    await page.route('**/storage/v1/object/avatars', async route => {
+      if (route.request().method() !== 'DELETE') return route.continue();
+      const body = route.request().postDataJSON() as { prefixes?: string[] };
+      preservedAvatarRemovals.push(body.prefixes || []);
+      return route.fulfill({ status: 200, json: [] });
+    });
+
+    try {
+      await page.goto('/perfil');
+      await expect(page.getByTestId('loading-screen')).toHaveCount(0, { timeout: 20_000 });
+      const uploadResponse = page.waitForResponse(response =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.includes('/storage/v1/object/avatars/'),
+      );
+      await page.locator('input[type="file"]').setInputFiles({
+        name: 'e2e-avatar.gif',
+        mimeType: 'image/gif',
+        buffer: Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64'),
+      });
+      await expect(page.getByTestId('photo-save-feedback')).toHaveText('Imagem pronta para salvar.');
+      await page.evaluate(() => {
+        const browser = globalThis as unknown as {
+          Event: new (type: string) => unknown;
+          dispatchEvent(event: unknown): boolean;
+        };
+        browser.dispatchEvent(new browser.Event('focus'));
+      });
+      const authValidationScreen = page.getByRole('status', { name: 'Validando seu acesso...' });
+      await expect(authValidationScreen).toBeVisible();
+      await expect(authValidationScreen).toHaveCount(0, { timeout: 20_000 });
+      await expect(page.getByTestId('loading-screen')).toHaveCount(0, { timeout: 20_000 });
+      await expect(page.getByTestId('photo-save-feedback')).toHaveText('Imagem pronta para salvar.');
+      await page.getByRole('button', { name: 'Salvar alterações' }).click();
+
+      const response = await uploadResponse;
+      const uploadUrl = new URL(response.url());
+      uploadedPath = decodeURIComponent(
+        uploadUrl.pathname.split('/storage/v1/object/avatars/')[1] || '',
+      );
+      expect(uploadedPath).toMatch(/^[^/]+\/[^/]+\.gif$/);
+      expect(response.ok(), `GIF storage upload failed (${response.status()}).`).toBeTruthy();
+
+      await expect(page.getByTestId('photo-save-feedback')).toHaveText('Foto de perfil atualizada.');
+      await page.reload();
+      const savedAvatar = page.getByRole('img', { name: /^Foto de / });
+      await expect(savedAvatar).toBeVisible();
+      await expect.poll(() => savedAvatar.evaluate(image => (image as unknown as { naturalWidth: number }).naturalWidth))
+        .toBeGreaterThan(0);
+      const signedAvatarUrl = await savedAvatar.getAttribute('src');
+      expect(signedAvatarUrl).toContain(`/object/sign/avatars/${uploadedPath}`);
+      const storedImageResponse = await page.request.get(signedAvatarUrl!);
+      expect(storedImageResponse.ok()).toBeTruthy();
+      expect(storedImageResponse.headers()['content-type']).toContain('image/gif');
+    } finally {
+      if (storedSession) {
+        const restoreProfileResponse = await fetch(
+          `${isolatedProjectUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
+          {
+            method: 'PATCH',
+            headers: {
+              apikey: isolatedAnonKey,
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=minimal',
+            },
+            body: JSON.stringify({ avatar_url: originalAvatarUrl }),
+          },
+        );
+        expect(restoreProfileResponse.ok, 'The original profile avatar must be restored after the test.')
+          .toBeTruthy();
+      }
+      if (uploadedPath) {
+        const encodedPath = uploadedPath.split('/').map(encodeURIComponent).join('/');
+        const cleanupResponse = await fetch(
+          `${isolatedProjectUrl}/storage/v1/object/avatars/${encodedPath}`,
+          {
+            method: 'DELETE',
+            headers: {
+              apikey: isolatedAnonKey,
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        );
+        expect(cleanupResponse.ok, 'The test GIF must be removed from Supabase Storage.')
+          .toBeTruthy();
+      }
+    }
+  });
+
+  test('preserves the current avatar when uploading a replacement fails', async ({ page }) => {
+    test.skip(!accounts.manager, 'Requires E2E_MANAGER_EMAIL and E2E_MANAGER_PASSWORD.');
+    const account = requireAccount(accounts.manager, 'manager');
+    const profileMock = await mockAvatarProfile(page, account);
+    const storageMock = await mockAvatarStorage(page, { failUpload: true });
+    await loginAs(page, account);
+    await page.goto('/perfil');
+
+    await page.locator('input[type="file"]').setInputFiles('artifacts/barber-manager/public/favicon-32x32.png');
+    await page.getByRole('button', { name: 'Salvar alterações' }).click();
+    await expect(page.getByTestId('photo-save-feedback')).toContainText(/Não foi possível enviar a foto/);
+    await expect(page.getByRole('img', { name: /^Foto de / })).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(page.getByRole('button', { name: 'Salvar alterações' })).toBeVisible();
+    expect(profileMock.previousAvatarPath()).toMatch(/^[^/]+\/old-avatar\.png$/);
+    expect(storageMock.removedPaths).toEqual([]);
+    await page.getByRole('button', { name: 'Cancelar' }).click();
+    await expect(page.getByRole('img', { name: /^Foto de / })).toHaveAttribute('src', /object\/sign\/avatars\/[^/]+\/old-avatar\.png/);
+  });
+
+  test('preserves the current avatar when saving its replacement fails', async ({ page }) => {
+    test.skip(!accounts.manager, 'Requires E2E_MANAGER_EMAIL and E2E_MANAGER_PASSWORD.');
+    const account = requireAccount(accounts.manager, 'manager');
+    const profileMock = await mockAvatarProfile(page, account, { failUpdate: true });
+    const storageMock = await mockAvatarStorage(page);
+    await loginAs(page, account);
+    await page.goto('/perfil');
+
+    await page.locator('input[type="file"]').setInputFiles('artifacts/barber-manager/public/favicon-32x32.png');
+    await page.getByRole('button', { name: 'Salvar alterações' }).click();
+    await expect(page.getByTestId('photo-save-feedback')).toContainText(/Não foi possível salvar a foto/);
+    await expect(page.getByRole('img', { name: /^Foto de / })).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(page.getByRole('button', { name: 'Salvar alterações' })).toBeVisible();
+    expect(profileMock.previousAvatarPath()).toMatch(/^[^/]+\/old-avatar\.png$/);
+    expect(storageMock.removedPaths).toEqual([]);
+  });
+
+  test('keeps the saved replacement successful when removing the old avatar fails', async ({ page }) => {
+    test.skip(!accounts.manager, 'Requires E2E_MANAGER_EMAIL and E2E_MANAGER_PASSWORD.');
+    const account = requireAccount(accounts.manager, 'manager');
+    const profileMock = await mockAvatarProfile(page, account);
+    const storageMock = await mockAvatarStorage(page, { failRemoval: true });
+    await loginAs(page, account);
+    await page.goto('/perfil');
+
+    await page.locator('input[type="file"]').setInputFiles('artifacts/barber-manager/public/favicon-32x32.png');
+    await page.getByRole('button', { name: 'Salvar alterações' }).click();
+    await expect(page.getByTestId('photo-save-feedback')).toHaveText('Foto de perfil atualizada.');
+    await expect.poll(() => storageMock.removedPaths).toEqual([[profileMock.previousAvatarPath()]]);
+    expect(storageMock.uploadedPaths).toHaveLength(1);
+    await expect(page.getByRole('img', { name: /^Foto de / })).toHaveAttribute(
+      'src',
+      new RegExp(`/object/sign/avatars/${profileMock.previousAvatarPath().split('/')[0]}/`),
+    );
+  });
+
+  test('redirects an unlinked session to access control without offering company or request creation', async ({ page }) => {
     test.skip(!accounts.onboarding, 'Requires a dedicated Supabase user without an organization.');
     const account = requireAccount(accounts.onboarding, 'onboarding');
     await loginAs(page, account);
     await expect(page).toHaveURL(/\/onboarding/);
-    await expect(page.getByRole('heading', { name: 'Solicitar acesso à equipe' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Acesso controlado', exact: true })).toBeVisible();
     await expect(page.getByLabel('Nome do estabelecimento')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Continuar para o pedido', exact: true })).toBeVisible();
+    await expect(page.getByText('Não é possível criar outro salão com este perfil. Entre por um convite ou peça ao Gestor/Proprietário o link de acesso desta empresa.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Aceitar convite', exact: true })).toBeVisible();
   });
 
   test('preserves an invitation token when navigating to sign in or sign up', async ({ page }) => {
