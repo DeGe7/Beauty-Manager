@@ -19,6 +19,7 @@ import {
 } from '@/data/plan-usage';
 import { normalizeClientPhone } from '@/data/client-phone';
 import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
+import { useTemporaryFormState } from '@/data/form-drafts';
 
 const paymentMethods: PayMethod[] = ['dinheiro', 'pix', 'debito', 'credito'];
 const paymentStatusLabels: Record<SubscriptionPaymentStatus, string> = {
@@ -96,15 +97,32 @@ export default function Planos() {
   const activeSubs = subscribers.filter(s => subscriberStatus(s, today) === 'pago');
   const mrr = activeSubs.reduce((total, sub) => total + (plans.find(plan => plan.id === sub.planId)?.price ?? 0), 0);
 
-  const [isPlanOpen, setIsPlanOpen] = useState(false);
-  const [planEditingId, setPlanEditingId] = useState<string | null>(null);
-  const [planForm, setPlanForm] = useState({
-    name: '',
-    price: '',
-    duration: 'Mensal' as SubscriptionPlan['duration'],
-    salonSharePercent: '',
-    services: [{ serviceId: '', usesPerCycle: '1' }],
-  });
+  const [planDraft, setPlanDraft, clearPlanDraft] = useTemporaryFormState(
+    'plan-editor',
+    'planos',
+    {
+      isOpen: false,
+      editingId: null as string | null,
+      form: {
+        name: '',
+        price: '',
+        duration: 'Mensal' as SubscriptionPlan['duration'],
+        salonSharePercent: '',
+        services: [{ serviceId: '', usesPerCycle: '1' }],
+      },
+    },
+  );
+  const { isOpen: isPlanOpen, editingId: planEditingId, form: planForm } = planDraft;
+  const setIsPlanOpen = (open: boolean) => {
+    if (!open) clearPlanDraft();
+    else setPlanDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setPlanForm = (update: typeof planForm | ((current: typeof planForm) => typeof planForm)) => {
+    setPlanDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
   const planFormUses = planForm.services.reduce((total, service) => {
     const uses = Number(service.usesPerCycle);
     return total + (Number.isInteger(uses) && uses > 0 ? uses : 0);
@@ -117,27 +135,28 @@ export default function Planos() {
 
   const handlePlanOpen = (plan?: SubscriptionPlan) => {
     if (plan) {
-      setPlanEditingId(plan.id);
-      setPlanForm({
-        name: plan.name,
-        price: plan.price.toString(),
-        duration: plan.duration,
-        salonSharePercent: plan.salonSharePercent == null ? '' : String(plan.salonSharePercent),
-        services: plan.services.length
-          ? plan.services.map(service => editorServiceFromPlan(service, config.services))
-          : [{ serviceId: '', usesPerCycle: '1' }],
+      setPlanDraft({
+        isOpen: true,
+        editingId: plan.id,
+        form: {
+          name: plan.name,
+          price: plan.price.toString(),
+          duration: plan.duration,
+          salonSharePercent: plan.salonSharePercent == null ? '' : String(plan.salonSharePercent),
+          services: plan.services.length
+            ? plan.services.map(service => editorServiceFromPlan(service, config.services))
+            : [{ serviceId: '', usesPerCycle: '1' }],
+        },
       });
     } else {
-      setPlanEditingId(null);
-      setPlanForm({
-        name: '',
-        price: '',
-        duration: 'Mensal',
-        salonSharePercent: '',
-        services: [{ serviceId: '', usesPerCycle: '1' }],
-      });
+      setPlanDraft(current => current.isOpen && !current.editingId
+        ? current
+        : {
+            isOpen: true,
+            editingId: null,
+            form: { name: '', price: '', duration: 'Mensal', salonSharePercent: '', services: [{ serviceId: '', usesPerCycle: '1' }] },
+          });
     }
-    setIsPlanOpen(true);
   };
 
   const handlePlanSubmit = async (event: React.FormEvent) => {
@@ -185,7 +204,7 @@ export default function Planos() {
         });
     if (!saved) return;
     toast.success(planEditingId ? 'Plano atualizado' : 'Plano criado');
-    setIsPlanOpen(false);
+    clearPlanDraft();
   };
 
   const handlePlanDelete = async (id: string) => {
@@ -196,14 +215,29 @@ export default function Planos() {
     if (await removePlan(id)) toast.success('Plano removido');
   };
 
-  const [isSubOpen, setIsSubOpen] = useState(false);
-  const [subEditingId, setSubEditingId] = useState<string | null>(null);
-  const [subForm, setSubForm] = useState({
-    name: '', phone: '', planId: '', startDate: today,
-    nextPayment: '', status: 'pendente' as 'ativo' | 'vencido' | 'pendente',
-  });
+  const [subscriberDraft, setSubscriberDraft, clearSubscriberDraft] = useTemporaryFormState(
+    'subscriber-editor',
+    'planos',
+    {
+      isOpen: false,
+      editingId: null as string | null,
+      selectedClientId: '',
+      form: { name: '', phone: '', planId: '', startDate: today, nextPayment: '', status: 'pendente' as 'ativo' | 'vencido' | 'pendente' },
+    },
+  );
+  const { isOpen: isSubOpen, editingId: subEditingId, selectedClientId: selectedSubClientId, form: subForm } = subscriberDraft;
+  const setIsSubOpen = (open: boolean) => {
+    if (!open) clearSubscriberDraft();
+    else setSubscriberDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setSubForm = (update: typeof subForm | ((current: typeof subForm) => typeof subForm)) => {
+    setSubscriberDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
   const [subClientSearch, setSubClientSearch] = useState('');
-  const [selectedSubClientId, setSelectedSubClientId] = useState('');
+  const setSelectedSubClientId = (selectedClientId: string) => setSubscriberDraft(current => ({ ...current, selectedClientId }));
   const [isSubSaving, setIsSubSaving] = useState(false);
   const selectedSubClient = clients.find(client => client.id === selectedSubClientId);
   const normalizedSubPhone = normalizeClientPhone(subForm.phone);
@@ -232,29 +266,37 @@ export default function Planos() {
 
   const handleSubOpen = (subscriber?: Subscriber) => {
     if (subscriber) {
-      setSubEditingId(subscriber.id);
       const normalizedPhone = normalizeClientPhone(subscriber.phone);
       const matches = clients.filter(client => normalizedPhone
         ? normalizeClientPhone(client.whatsapp) === normalizedPhone
         : client.name.trim().toLocaleLowerCase('pt-BR') === subscriber.name.trim().toLocaleLowerCase('pt-BR'));
       const linkedClient = matches.length === 1 ? matches[0] : undefined;
-      setSelectedSubClientId(linkedClient?.id ?? '');
+      const selectedClientId = linkedClient?.id ?? '';
       setSubClientSearch('');
-      setSubForm({
-        name: linkedClient?.name ?? subscriber.name,
-        phone: linkedClient?.whatsapp ?? subscriber.phone,
-        planId: subscriber.planId,
-        startDate: subscriber.startDate,
-        nextPayment: subscriber.nextPayment,
-        status: subscriber.status,
+      setSubscriberDraft({
+        isOpen: true,
+        editingId: subscriber.id,
+        selectedClientId,
+        form: {
+          name: linkedClient?.name ?? subscriber.name,
+          phone: linkedClient?.whatsapp ?? subscriber.phone,
+          planId: subscriber.planId,
+          startDate: subscriber.startDate,
+          nextPayment: subscriber.nextPayment,
+          status: subscriber.status,
+        },
       });
     } else {
-      setSubEditingId(null);
-      setSelectedSubClientId('');
       setSubClientSearch('');
-      setSubForm({ name: '', phone: '', planId: '', startDate: today, nextPayment: '', status: 'pendente' });
+      setSubscriberDraft(current => current.isOpen && !current.editingId
+        ? current
+        : {
+            isOpen: true,
+            editingId: null,
+            selectedClientId: '',
+            form: { name: '', phone: '', planId: '', startDate: today, nextPayment: '', status: 'pendente' },
+          });
     }
-    setIsSubOpen(true);
   };
 
   const selectSubscriberClient = (client: (typeof clients)[number]) => {
@@ -342,30 +384,50 @@ export default function Planos() {
     }
   };
 
-  const [paymentSubscriber, setPaymentSubscriber] = useState<Subscriber | null>(null);
-  const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+  const [subscriptionPaymentDraft, setSubscriptionPaymentDraft, clearSubscriptionPaymentDraft] = useTemporaryFormState(
+    'subscription-payment-editor',
+    'planos',
+    {
+      isOpen: false,
+      subscriberId: null as string | null,
+      form: {
+        status: 'pago' as SubscriptionPaymentStatus,
+        dueDate: today,
+        paidAt: today,
+        amount: '',
+        paymentMethod: 'dinheiro' as PayMethod,
+        note: '',
+      },
+    },
+  );
+  const { isOpen: isPaymentOpen, subscriberId: paymentSubscriberId, form: paymentForm } = subscriptionPaymentDraft;
+  const paymentSubscriber = subscribers.find(subscriber => subscriber.id === paymentSubscriberId) ?? null;
+  const setIsPaymentOpen = (open: boolean) => {
+    if (!open) clearSubscriptionPaymentDraft();
+    else setSubscriptionPaymentDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setPaymentForm = (update: typeof paymentForm | ((current: typeof paymentForm) => typeof paymentForm)) => {
+    setSubscriptionPaymentDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
   const [isPaymentSaving, setIsPaymentSaving] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({
-    status: 'pago' as SubscriptionPaymentStatus,
-    dueDate: today,
-    paidAt: today,
-    amount: '',
-    paymentMethod: 'dinheiro' as PayMethod,
-    note: '',
-  });
 
   const openPaymentDialog = (subscriber: Subscriber) => {
     const plan = plans.find(item => item.id === subscriber.planId);
-    setPaymentSubscriber(subscriber);
-    setPaymentForm({
-      status: subscriberStatus(subscriber, today) === 'pago' ? 'pago' : subscriberStatus(subscriber, today),
-      dueDate: subscriber.nextPayment,
-      paidAt: today,
-      amount: plan?.price.toFixed(2) ?? '',
-      paymentMethod: 'dinheiro',
-      note: '',
+    setSubscriptionPaymentDraft({
+      isOpen: true,
+      subscriberId: subscriber.id,
+      form: {
+        status: subscriberStatus(subscriber, today) === 'pago' ? 'pago' : subscriberStatus(subscriber, today),
+        dueDate: subscriber.nextPayment,
+        paidAt: today,
+        amount: plan?.price.toFixed(2) ?? '',
+        paymentMethod: 'dinheiro',
+        note: '',
+      },
     });
-    setIsPaymentOpen(true);
   };
 
   const handlePaymentSubmit = async (event: React.FormEvent) => {
@@ -392,7 +454,7 @@ export default function Planos() {
       });
       if (!saved) return;
       toast.success(paymentForm.status === 'pago' ? 'Mensalidade confirmada presencialmente' : `Mensalidade marcada como ${paymentStatusLabels[paymentForm.status].toLowerCase()}`);
-      setIsPaymentOpen(false);
+      clearSubscriptionPaymentDraft();
     } finally {
       setIsPaymentSaving(false);
     }
@@ -455,10 +517,10 @@ export default function Planos() {
             <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[90dvh] overflow-y-auto bg-brand-surface border-brand-border text-foreground sm:max-w-lg">
               <DialogHeader><DialogTitle>{planEditingId ? 'Editar Plano' : 'Novo Plano'}</DialogTitle></DialogHeader>
               <form onSubmit={handlePlanSubmit} className="space-y-4 pt-4 [&_input]:min-h-11 [&_select]:min-h-11">
-                <div><label className="text-xs uppercase text-muted-foreground">Nome do Plano</label><input required type="text" value={planForm.name} onChange={e => setPlanForm({ ...planForm, name: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none" /></div>
+                <div><label htmlFor="subscription-plan-name" className="text-xs uppercase text-muted-foreground">Nome do Plano</label><input id="subscription-plan-name" data-testid="input-plan-name" required type="text" value={planForm.name} onChange={e => setPlanForm({ ...planForm, name: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none" /></div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div><label className="text-xs uppercase text-muted-foreground">Valor (R$)</label><input required type="number" min="0" step="0.01" value={planForm.price} onChange={e => setPlanForm({ ...planForm, price: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none" /></div>
-                  <div><label className="text-xs uppercase text-muted-foreground">Frequência</label><select value={planForm.duration} onChange={e => setPlanForm({ ...planForm, duration: e.target.value as SubscriptionPlan['duration'] })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option>Mensal</option><option>Trimestral</option><option>Semestral</option><option>Anual</option></select></div>
+                  <div><label htmlFor="subscription-plan-price" className="text-xs uppercase text-muted-foreground">Valor (R$)</label><input id="subscription-plan-price" data-testid="input-plan-price" required type="number" min="0" step="0.01" value={planForm.price} onChange={e => setPlanForm({ ...planForm, price: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none" /></div>
+                  <div><label htmlFor="subscription-plan-duration" className="text-xs uppercase text-muted-foreground">Frequência</label><select id="subscription-plan-duration" data-testid="select-plan-duration" value={planForm.duration} onChange={e => setPlanForm({ ...planForm, duration: e.target.value as SubscriptionPlan['duration'] })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option>Mensal</option><option>Trimestral</option><option>Semestral</option><option>Anual</option></select></div>
                 </div>
                 <div>
                   <div className="mb-2 flex items-center gap-1">
@@ -742,8 +804,8 @@ export default function Planos() {
                  ) : selectedSubClient ? (
                    <p role="status" className="text-xs text-muted-foreground">O assinante será vinculado a este cadastro de cliente.</p>
                  ) : null}
-                 <div><label className="text-xs uppercase text-muted-foreground">Plano *</label><select required value={subForm.planId} onChange={e => { const planId = e.target.value; setSubForm({ ...subForm, planId, nextPayment: calculatedNextPayment(planId, subForm.startDate) }); }} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option value="">Selecione...</option>{plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></div>
-                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label className="text-xs uppercase text-muted-foreground">Início</label><input type="date" required value={subForm.startDate} onChange={e => setSubForm({ ...subForm, startDate: e.target.value, nextPayment: calculatedNextPayment(subForm.planId, e.target.value) })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div><div><div className="flex items-center gap-1"><label className="text-xs uppercase text-muted-foreground">Próximo vencimento</label><FeatureInfo label="Ciclo e usos do plano">O vencimento é calculado pelo ciclo do plano. Confirme o recebimento no Controle Diário. Renovar usos não altera o vencimento; trocar o assinante para outro plano reinicia as cotas.</FeatureInfo></div><div className="min-h-11 w-full bg-brand-bg/60 border border-brand-border rounded px-3 py-3 mt-1 text-sm text-muted-foreground">{subForm.nextPayment ? displayDate(subForm.nextPayment) : 'Selecione o plano'}</div></div></div>
+                  <div><label className="text-xs uppercase text-muted-foreground">Plano *</label><select data-testid="select-subscriber-plan" required value={subForm.planId} onChange={e => { const planId = e.target.value; setSubForm({ ...subForm, planId, nextPayment: calculatedNextPayment(planId, subForm.startDate) }); }} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option value="">Selecione...</option>{plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label htmlFor="subscriber-start-date" className="text-xs uppercase text-muted-foreground">Início</label><input id="subscriber-start-date" data-testid="input-subscriber-start-date" type="date" required value={subForm.startDate} onChange={e => setSubForm({ ...subForm, startDate: e.target.value, nextPayment: calculatedNextPayment(subForm.planId, e.target.value) })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div><div><div className="flex items-center gap-1"><label className="text-xs uppercase text-muted-foreground">Próximo vencimento</label><FeatureInfo label="Ciclo e usos do plano">O vencimento é calculado pelo ciclo do plano. Confirme o recebimento no Controle Diário. Renovar usos não altera o vencimento; trocar o assinante para outro plano reinicia as cotas.</FeatureInfo></div><div className="min-h-11 w-full bg-brand-bg/60 border border-brand-border rounded px-3 py-3 mt-1 text-sm text-muted-foreground">{subForm.nextPayment ? displayDate(subForm.nextPayment) : 'Selecione o plano'}</div></div></div>
                  <button type="submit" disabled={isSubSaving} className="min-h-11 w-full bg-brand-gold text-brand-bg font-bold py-2 rounded-lg disabled:cursor-not-allowed disabled:opacity-60">{isSubSaving ? 'Salvando...' : 'Salvar Assinante'}</button>
               </form>
             </DialogContent>
@@ -758,7 +820,7 @@ export default function Planos() {
                   const plan = plans.find(item => item.id === subscriber.planId);
                   const status = subscriberStatus(subscriber, today);
                   const benefits = planServiceBenefits(plan);
-                  return <tr key={subscriber.id} className={`border-b border-brand-border/50 hover:bg-brand-bg/50 ${recentlyAddedSubscriberIds.has(subscriber.id) ? 'bm-list-item-enter' : ''}`}><td className="py-3 font-medium">{subscriber.name}<br /><span className="text-xs text-muted-foreground font-normal">{subscriber.phone}</span></td><td className="py-3 font-medium text-brand-gold">{plan?.name || '—'}{benefits.length > 0 && <div className="mt-1 space-y-0.5 text-xs font-normal text-muted-foreground">{benefits.map(benefit => <p key={benefit.serviceId}>{benefit.serviceName}: {subscriberServiceUsesRemaining(appointments, subscriber, benefit)} de {benefit.usesPerCycle} usos restantes</p>)}</div>}</td><td className="py-3">{displayDate(subscriber.nextPayment)}</td><td className="py-3 text-center"><span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${statusClasses(status)}`}>{paymentStatusLabels[status]}</span></td><td className="py-3 text-right"><div className="flex justify-end gap-1">
+                  return <tr data-testid="subscriber-row" key={subscriber.id} className={`border-b border-brand-border/50 hover:bg-brand-bg/50 ${recentlyAddedSubscriberIds.has(subscriber.id) ? 'bm-list-item-enter' : ''}`}><td className="py-3 font-medium">{subscriber.name}<br /><span className="text-xs text-muted-foreground font-normal">{subscriber.phone}</span></td><td className="py-3 font-medium text-brand-gold">{plan?.name || '—'}{benefits.length > 0 && <div className="mt-1 space-y-0.5 text-xs font-normal text-muted-foreground">{benefits.map(benefit => <p key={benefit.serviceId}>{benefit.serviceName}: {subscriberServiceUsesRemaining(appointments, subscriber, benefit)} de {benefit.usesPerCycle} usos restantes</p>)}</div>}</td><td data-testid="subscriber-next-payment-date" className="py-3">{displayDate(subscriber.nextPayment)}</td><td className="py-3 text-center"><span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${statusClasses(status)}`}>{paymentStatusLabels[status]}</span></td><td className="py-3 text-right"><div className="flex justify-end gap-1">
                     <button aria-label={`Registrar mensalidade de ${subscriber.name}`} title="Registrar mensalidade presencial" onClick={() => openPaymentDialog(subscriber)} className="p-1.5 text-brand-gold hover:bg-brand-gold/10 rounded"><Receipt className="w-4 h-4" /></button>
                     {benefits.length > 0 && <button type="button" aria-label={`Renovar usos do plano de ${subscriber.name}`} title="Renovar usos do plano" onClick={() => renewUsages(subscriber)} className="p-1.5 text-brand-gold hover:bg-brand-gold/10 rounded"><RefreshCw className="w-4 h-4" /></button>}
                      {subscriber.phone && <button aria-label={`Enviar WhatsApp para ${subscriber.name}`} onClick={() => openSubscriberWhatsapp(subscriber, plan?.name)} className="p-1.5 text-[#25D366] hover:bg-[#25D366]/10 rounded"><MessageSquare className="w-4 h-4" /></button>}
@@ -783,7 +845,7 @@ export default function Planos() {
         <div className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-3 sm:p-6">
           {history.length === 0 ? <p className="text-center py-8 text-muted-foreground">Nenhuma mensalidade registrada ainda.</p> : <div className="space-y-3">{history.slice(0, 20).map(payment => {
             const subscriber = subscribers.find(item => item.id === payment.subscriberId);
-             return <div key={payment.id} className="grid min-w-0 grid-cols-1 md:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr_1.5fr_auto] gap-2 md:gap-4 items-center p-3 bg-brand-bg border border-brand-border/70 rounded-xl text-sm"><div className="min-w-0"><p className="break-words font-semibold">{subscriber?.name || 'Assinante removido'}</p><p className="text-xs text-muted-foreground">Vencimento: {displayDate(payment.dueDate)}</p></div><span className={`w-fit px-2 py-1 rounded text-[10px] font-bold uppercase ${statusClasses(payment.status)}`}>{paymentStatusLabels[payment.status]}</span><span className="text-muted-foreground"><span className="text-xs block">Data</span>{displayDate(payment.paidAt ?? payment.dueDate)}</span><span className="font-semibold">{brl(payment.amount)}<span className="block text-xs text-muted-foreground font-normal">{payment.paymentMethod ? PAY_LABELS[payment.paymentMethod] : 'Sem recebimento'}</span></span><span className="min-w-0 whitespace-normal break-words text-muted-foreground" title={payment.note}>{payment.note || 'Sem observação'}</span>{isManager && <button type="button" onClick={async () => { if (!window.confirm(`Excluir o histórico da mensalidade de ${subscriber?.name || 'assinante'}?`)) return; if (await removeSubscriptionPayment(payment.id)) toast.success('Histórico da mensalidade excluído.'); }} aria-label="Excluir histórico da mensalidade" className="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></button>}</div>;
+              return <div data-testid="subscription-payment-history-entry" key={payment.id} className="grid min-w-0 grid-cols-1 md:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr_1.5fr_auto] gap-2 md:gap-4 items-center p-3 bg-brand-bg border border-brand-border/70 rounded-xl text-sm"><div className="min-w-0"><p className="break-words font-semibold">{subscriber?.name || 'Assinante removido'}</p><p className="text-xs text-muted-foreground">Vencimento: {displayDate(payment.dueDate)}</p></div><span className={`w-fit px-2 py-1 rounded text-[10px] font-bold uppercase ${statusClasses(payment.status)}`}>{paymentStatusLabels[payment.status]}</span><span className="text-muted-foreground"><span className="text-xs block">Data</span>{displayDate(payment.paidAt ?? payment.dueDate)}</span><span className="font-semibold">{brl(payment.amount)}<span className="block text-xs text-muted-foreground font-normal">{payment.paymentMethod ? PAY_LABELS[payment.paymentMethod] : 'Sem recebimento'}</span></span><span className="min-w-0 whitespace-normal break-words text-muted-foreground" title={payment.note}>{payment.note || 'Sem observação'}</span>{isManager && <button type="button" onClick={async () => { if (!window.confirm(`Excluir o histórico da mensalidade de ${subscriber?.name || 'assinante'}?`)) return; if (await removeSubscriptionPayment(payment.id)) toast.success('Histórico da mensalidade excluído.'); }} aria-label="Excluir histórico da mensalidade" className="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></button>}</div>;
           })}</div>}
         </div>
       </section>
@@ -798,10 +860,10 @@ export default function Planos() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">Assinante: <strong className="text-foreground">{paymentSubscriber?.name}</strong></p>
           <form onSubmit={handlePaymentSubmit} className="space-y-4 pt-2 [&_input]:min-h-11 [&_select]:min-h-11">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label className="text-xs uppercase text-muted-foreground">Status *</label><select value={paymentForm.status} onChange={e => setPaymentForm({ ...paymentForm, status: e.target.value as SubscriptionPaymentStatus })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option value="pago">Paga</option><option value="pendente">Pendente</option><option value="vencido">Vencida</option></select></div><div><label className="text-xs uppercase text-muted-foreground">Vencimento</label><input type="date" required value={paymentForm.dueDate} onChange={e => setPaymentForm({ ...paymentForm, dueDate: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div></div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label className="text-xs uppercase text-muted-foreground">Valor (R$)</label><input type="number" min="0" step="0.01" required value={paymentForm.amount} onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none" /></div>{paymentForm.status === 'pago' && <div><label className="text-xs uppercase text-muted-foreground">Recebido em *</label><input type="date" required value={paymentForm.paidAt} onChange={e => setPaymentForm({ ...paymentForm, paidAt: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div>}</div>
-            {paymentForm.status === 'pago' && <div><label className="text-xs uppercase text-muted-foreground">Forma de pagamento *</label><select required value={paymentForm.paymentMethod} onChange={e => setPaymentForm({ ...paymentForm, paymentMethod: e.target.value as PayMethod })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none">{paymentMethods.map(method => <option key={method} value={method}>{PAY_LABELS[method]}</option>)}</select></div>}
-            <div><label className="text-xs uppercase text-muted-foreground">Observação da confirmação presencial</label><textarea rows={3} value={paymentForm.note} onChange={e => setPaymentForm({ ...paymentForm, note: e.target.value })} placeholder="Ex.: recebido no balcão pelo gestor" className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none resize-none" /></div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label htmlFor="subscription-payment-status" className="text-xs uppercase text-muted-foreground">Status *</label><select id="subscription-payment-status" data-testid="select-subscription-payment-status" value={paymentForm.status} onChange={e => setPaymentForm({ ...paymentForm, status: e.target.value as SubscriptionPaymentStatus })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none"><option value="pago">Paga</option><option value="pendente">Pendente</option><option value="vencido">Vencida</option></select></div><div><label htmlFor="subscription-payment-due-date" className="text-xs uppercase text-muted-foreground">Vencimento</label><input id="subscription-payment-due-date" data-testid="input-subscription-payment-due-date" type="date" required value={paymentForm.dueDate} onChange={e => setPaymentForm({ ...paymentForm, dueDate: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div></div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div><label htmlFor="subscription-payment-amount" className="text-xs uppercase text-muted-foreground">Valor (R$)</label><input id="subscription-payment-amount" data-testid="input-subscription-payment-amount" type="number" min="0" step="0.01" required value={paymentForm.amount} onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none" /></div>{paymentForm.status === 'pago' && <div><label htmlFor="subscription-payment-paid-at" className="text-xs uppercase text-muted-foreground">Recebido em *</label><input id="subscription-payment-paid-at" data-testid="input-subscription-payment-paid-at" type="date" required value={paymentForm.paidAt} onChange={e => setPaymentForm({ ...paymentForm, paidAt: e.target.value })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none text-sm" /></div>}</div>
+            {paymentForm.status === 'pago' && <div><label htmlFor="subscription-payment-method" className="text-xs uppercase text-muted-foreground">Forma de pagamento *</label><select id="subscription-payment-method" data-testid="select-subscription-payment-method" required value={paymentForm.paymentMethod} onChange={e => setPaymentForm({ ...paymentForm, paymentMethod: e.target.value as PayMethod })} className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none">{paymentMethods.map(method => <option key={method} value={method}>{PAY_LABELS[method]}</option>)}</select></div>}
+            <div><label htmlFor="subscription-payment-note" className="text-xs uppercase text-muted-foreground">Observação da confirmação presencial</label><textarea id="subscription-payment-note" data-testid="input-subscription-payment-note" rows={3} value={paymentForm.note} onChange={e => setPaymentForm({ ...paymentForm, note: e.target.value })} placeholder="Ex.: recebido no balcão pelo gestor" className="w-full bg-brand-bg border border-brand-border rounded px-3 py-2 mt-1 outline-none resize-none" /></div>
             <div className="flex gap-2 text-xs text-muted-foreground bg-brand-bg border border-brand-border rounded-lg p-3"><Clock3 className="w-4 h-4 text-brand-gold shrink-0" /> Ao marcar como paga, o próximo vencimento avançará automaticamente conforme o ciclo do plano.</div>
             <button type="submit" disabled={isPaymentSaving} className="min-h-11 w-full bg-brand-gold text-brand-bg font-bold py-2 rounded-lg disabled:opacity-60 disabled:cursor-not-allowed">{isPaymentSaving ? 'Salvando...' : 'Salvar controle presencial'}</button>
           </form>
