@@ -146,11 +146,11 @@ export default function Login() {
               </>
             ) : (
               <>
-                É um novo profissional?{' '}
-                <Link href="/solicitar-acesso" className="text-brand-gold hover:underline">
-                  Solicite autorização
+                Tem um salão?{' '}
+                <Link href="/cadastro" className="text-brand-gold hover:underline">
+                  Crie sua conta
                 </Link>
-                {' '}e aguarde o convite para criar sua conta.
+                . Profissionais entram pelo link enviado pelo salão.
               </>
             )}
           </p>
