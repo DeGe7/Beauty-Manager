@@ -29,6 +29,11 @@ export interface UserSession {
   professionalId?: string;
   avatar?: string;
   organizationId?: string;
+  organizations: Array<{
+    id: string;
+    name: string;
+    role: Role;
+  }>;
   permissions?: string[];
 }
 
