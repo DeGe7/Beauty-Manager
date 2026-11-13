@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/auth/auth';
 import { api } from '@/data/api';
-import { Building2, ShieldCheck, Link as LinkIcon, LogIn, UserRoundCheck } from 'lucide-react';
+import { Building2, ShieldCheck, Link as LinkIcon, LogIn } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function Onboarding() {
@@ -87,12 +87,14 @@ export default function Onboarding() {
             <Building2 className="w-8 h-8" />
           </div>
           <h1 className="text-3xl md:text-4xl font-bold text-foreground">
-            {options?.canRequestAccess ? 'Solicitar acesso à equipe' : 'Acesso controlado'}
+            {options?.canCreateOrganization
+              ? (profile.role === 'gestor' ? 'Adicionar outro salão' : 'Criar seu salão')
+              : 'Acesso controlado'}
           </h1>
           <p className="text-muted-foreground text-base leading-relaxed">
-            {options?.canRequestAccess
-              ? `${profile.name}, envie seus dados sem criar uma conta. Se o Gestor/Proprietário aprovar, você receberá um convite para cadastro.`
-              : `${profile.name}, a criação de empresas está desativada nesta aplicação. Solicite ao Gestor/Proprietário um convite válido para entrar.`}
+            {options?.canCreateOrganization
+              ? `${profile.name}, cada salão terá equipe, configurações e dados separados. Você poderá alternar entre os salões depois.`
+              : `${profile.name}, crie seu acesso pelo convite do salão. Para solicitar entrada, peça ao Gestor/Proprietário o link específico daquela empresa.`}
           </p>
         </div>
 
@@ -122,7 +124,9 @@ export default function Onboarding() {
             <div className="flex gap-3 rounded-xl border border-brand-border bg-brand-bg/60 p-4">
               <ShieldCheck className="w-5 h-5 shrink-0 text-brand-gold mt-0.5" />
               <p className="text-sm text-muted-foreground leading-relaxed">
-                A primeira conta se torna Gestor / Proprietário. A empresa poderá ser criada uma única vez neste aplicativo.
+                {profile.role === 'gestor'
+                  ? 'Você será Gestor / Proprietário do novo salão. Os registros atuais não serão transferidos nem alterados.'
+                  : 'Sua conta será Gestor / Proprietário deste salão. Os dados de outras empresas ficam isolados.'}
               </p>
             </div>
 
@@ -131,27 +135,12 @@ export default function Onboarding() {
               disabled={isSaving}
               className="w-full rounded-lg bg-brand-gold py-3 font-bold text-brand-bg hover:bg-brand-gold/90 disabled:opacity-60"
             >
-              {isSaving ? 'Criando estabelecimento...' : 'Continuar'}
+              {isSaving ? 'Criando salão...' : 'Criar salão'}
             </button>
           </form>
-         ) : options.canRequestAccess ? (
-            <section className="rounded-2xl border border-brand-gold/30 bg-brand-surface p-5 sm:p-6 md:p-8">
-             <div className="flex items-start gap-3">
-               <UserRoundCheck className="mt-0.5 h-5 w-5 shrink-0 text-brand-gold" />
-               <div>
-                 <h2 className="font-bold text-foreground">Solicitar acesso à empresa</h2>
-                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                    Envie seu nome e um contato. O Gestor/Proprietário escolherá seu perfil profissional e, se aprovar, emitirá um convite para cadastro.
-                 </p>
-               </div>
-             </div>
-             <button type="button" onClick={() => setLocation('/solicitar-acesso')} className="mt-5 w-full rounded-lg bg-brand-gold py-3 font-bold text-brand-bg hover:bg-brand-gold/90">
-               Continuar para o pedido
-             </button>
-           </section>
          ) : (
            <div role="alert" className="rounded-2xl border border-warning/30 bg-warning/10 p-5 text-sm text-foreground">
-              Não é possível criar empresas nem abrir um pedido de acesso neste momento. Peça um convite válido ao Gestor/Proprietário.
+              Não é possível criar outro salão com este perfil. Entre por um convite ou peça ao Gestor/Proprietário o link de acesso desta empresa.
            </div>
          )}
 
