@@ -3,6 +3,7 @@
   "include": ["./**/*.ts"],
   "compilerOptions": {
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "module": "esnext",
     "moduleResolution": "bundler"
   }
