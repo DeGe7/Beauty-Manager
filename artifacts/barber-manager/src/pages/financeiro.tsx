@@ -17,6 +17,7 @@ import { api, type PersonalEarning } from '@/data/api';
 import { getNextCashClosingWindow, type CashClosingSchedule } from '@/data/cash-closing';
 import { subscriptionReceiptDate } from '@/data/subscription-payment';
 import { useRecentlyAddedIds } from '@/hooks/useRecentlyAddedIds';
+import { useTemporaryFormState } from '@/data/form-drafts';
 
 const TABS = ['Visão Geral', 'Por Profissional', 'Serviços', 'Produtos'] as const;
 type Period = 'anual' | 'semestral' | 'trimestral' | 'mensal' | 'semanal';
@@ -166,7 +167,11 @@ export default function Financeiro() {
   const [period, setPeriod] = useState<Period>('mensal');
   const [historyOpen, setHistoryOpen] = useState(false);
   const storedCashSchedule = config.cashClosing ?? DEFAULT_CASH_CLOSING;
-  const [cashScheduleDraft, setCashScheduleDraft] = useState<CashClosingSchedule>(storedCashSchedule);
+  const [cashScheduleDraft, setCashScheduleDraft, clearCashScheduleDraft] = useTemporaryFormState(
+    'cash-closing-schedule',
+    'financeiro',
+    storedCashSchedule,
+  );
   const [isSavingCashSchedule, setIsSavingCashSchedule] = useState(false);
   const [isClosingCash, setIsClosingCash] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
@@ -238,6 +243,8 @@ export default function Financeiro() {
     setIsSavingCashSchedule(true);
     try {
       if (await updateConfig({ cashClosing: cashScheduleDraft })) {
+        clearCashScheduleDraft();
+        setCashScheduleDraft(cashScheduleDraft);
         toast.success('Agenda de fechamento atualizada.');
       }
     } finally {
@@ -472,9 +479,26 @@ export default function Financeiro() {
     };
   });
 
-  const [expOpen, setExpOpen] = useState(false);
-  const [expForm, setExpForm] = useState({ date: formatDateKey(), desc: '', amount: '', cat: 'Outros' as ExpenseCategory, paymentMethod: '' as PayMethod | '' });
-  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
+  const [expenseDraft, setExpenseDraft, clearExpenseDraft] = useTemporaryFormState(
+    'expense-editor',
+    'financeiro',
+    {
+      isOpen: false,
+      editingId: null as string | null,
+      form: { date: formatDateKey(), desc: '', amount: '', cat: 'Outros' as ExpenseCategory, paymentMethod: '' as PayMethod | '' },
+    },
+  );
+  const { isOpen: expOpen, editingId: editingExpenseId, form: expForm } = expenseDraft;
+  const setExpOpen = (open: boolean) => {
+    if (!open) clearExpenseDraft();
+    else setExpenseDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setExpForm = (update: typeof expForm | ((current: typeof expForm) => typeof expForm)) => {
+    setExpenseDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
   const [isSavingExpense, setIsSavingExpense] = useState(false);
   const handleExp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -488,18 +512,29 @@ export default function Financeiro() {
       const saved = editingExpenseId ? await updateExpense(editingExpenseId, payload) : await addExpense(payload);
       if (saved) {
         toast.success(editingExpenseId ? 'Despesa atualizada' : 'Despesa adicionada');
-        setExpOpen(false);
-        setEditingExpenseId(null);
-        setExpForm({ date: formatDateKey(), desc: '', amount: '', cat: 'Outros', paymentMethod: '' });
+        clearExpenseDraft();
       }
     } finally {
       setIsSavingExpense(false);
     }
   };
 
-  const [incOpen, setIncOpen] = useState(false);
-  const [incForm, setIncForm] = useState({ date: formatDateKey(), desc: '', amount: '' });
-  const [editingIncomeId, setEditingIncomeId] = useState<string | null>(null);
+  const [incomeDraft, setIncomeDraft, clearIncomeDraft] = useTemporaryFormState(
+    'income-editor',
+    'financeiro',
+    { isOpen: false, editingId: null as string | null, form: { date: formatDateKey(), desc: '', amount: '' } },
+  );
+  const { isOpen: incOpen, editingId: editingIncomeId, form: incForm } = incomeDraft;
+  const setIncOpen = (open: boolean) => {
+    if (!open) clearIncomeDraft();
+    else setIncomeDraft(current => ({ ...current, isOpen: true }));
+  };
+  const setIncForm = (update: typeof incForm | ((current: typeof incForm) => typeof incForm)) => {
+    setIncomeDraft(current => ({
+      ...current,
+      form: typeof update === 'function' ? update(current.form) : update,
+    }));
+  };
   const [isSavingIncome, setIsSavingIncome] = useState(false);
   const handleInc = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -509,24 +544,26 @@ export default function Financeiro() {
       const saved = editingIncomeId ? await updateIncome(editingIncomeId, payload) : await addIncome(payload);
       if (!saved) return;
       toast.success(editingIncomeId ? 'Receita atualizada' : 'Receita adicionada');
-      setIncOpen(false);
-      setEditingIncomeId(null);
-      setIncForm({ date: formatDateKey(), desc: '', amount: '' });
+      clearIncomeDraft();
     } finally {
       setIsSavingIncome(false);
     }
   };
 
   const startIncomeEdit = (income: typeof incomes[number]) => {
-    setEditingIncomeId(income.id);
-    setIncForm({ date: income.date, desc: income.description, amount: String(income.amount) });
-    setIncOpen(true);
+    setIncomeDraft({
+      isOpen: true,
+      editingId: income.id,
+      form: { date: income.date, desc: income.description, amount: String(income.amount) },
+    });
   };
 
   const startExpenseEdit = (expense: typeof expenses[number]) => {
-    setEditingExpenseId(expense.id);
-    setExpForm({ date: expense.date, desc: expense.description, amount: String(expense.amount), cat: expense.category, paymentMethod: expense.paymentMethod ?? '' });
-    setExpOpen(true);
+    setExpenseDraft({
+      isOpen: true,
+      editingId: expense.id,
+      form: { date: expense.date, desc: expense.description, amount: String(expense.amount), cat: expense.category, paymentMethod: expense.paymentMethod ?? '' },
+    });
   };
 
   const handleRemoveIncome = async (id: string) => {
@@ -596,9 +633,9 @@ export default function Financeiro() {
          </div>
       </div>
 
-      <nav aria-label="Seções financeiras" className="flex border-b border-brand-border overflow-x-auto hide-scrollbar">
+      <nav aria-label="Seções financeiras" className="grid grid-cols-2 gap-2 border-b border-brand-border hide-scrollbar sm:flex sm:gap-0 sm:overflow-x-auto">
         {TABS.map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === tab ? 'border-brand-gold text-brand-gold' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
+          <button key={tab} onClick={() => setActiveTab(tab)} className={`min-w-0 px-3 py-3 text-center text-sm font-medium border-b-2 whitespace-normal transition-colors sm:whitespace-nowrap sm:px-4 ${activeTab === tab ? 'border-brand-gold text-brand-gold' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
             {tab}
           </button>
         ))}
@@ -880,15 +917,15 @@ export default function Financeiro() {
                 )}
               </section>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 bg-brand-surface border border-brand-border rounded-2xl p-6">
+              <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-3">
+                <div className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-4 sm:col-span-1 sm:p-6 lg:col-span-2">
                   <h3 className="text-lg font-bold text-foreground mb-4">Fluxo Diário ({months[month-1]})</h3>
                   <div className="h-72">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={dailyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                      <LineChart data={dailyData} margin={{ top: 10, right: 4, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--brand-border))" vertical={false} />
                         <XAxis dataKey="day" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                        <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={v => `R$${v}`} />
+                        <YAxis width={48} stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={v => `R$${v}`} />
                         <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--brand-surface))', borderColor: 'hsl(var(--brand-border))' }} />
                         <Line type="monotone" dataKey="in" name="Entradas" stroke="hsl(var(--success))" strokeWidth={3} dot={false} />
                         <Line type="monotone" dataKey="out" name="Saídas" stroke="hsl(var(--destructive))" strokeWidth={3} dot={false} />
@@ -897,10 +934,10 @@ export default function Financeiro() {
                   </div>
                 </div>
 
-                <div className="bg-brand-surface border border-brand-border rounded-2xl p-6 flex flex-col h-[400px]">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-bold text-foreground">Movimentações</h3>
-                     <div className="flex gap-2">
+                <div className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 flex flex-col h-[400px]">
+                  <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <h3 className="min-w-0 text-lg font-bold text-foreground">Movimentações</h3>
+                     <div className="ml-auto flex shrink-0 gap-2">
                        {isManager && (
                          <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
                            <button aria-label="Ver histórico financeiro" onClick={openFinanceHistory} className="h-8 px-2 flex items-center gap-1.5 rounded-lg bg-brand-gold/10 text-brand-gold hover:bg-brand-gold/20 transition-colors text-xs font-semibold">
@@ -953,26 +990,14 @@ export default function Financeiro() {
                            </DialogContent>
                          </Dialog>
                        )}
-                      <Dialog open={incOpen} onOpenChange={open => {
-                        setIncOpen(open);
-                        if (!open) {
-                          setEditingIncomeId(null);
-                          setIncForm({ date: formatDateKey(), desc: '', amount: '' });
-                        }
-                      }}>
+                      <Dialog open={incOpen} onOpenChange={setIncOpen}>
                         <DialogTrigger asChild><button aria-label="Lançar receita manual" className="w-8 h-8 flex justify-center items-center rounded-lg bg-success/10 text-success hover:bg-success/20 transition-colors"><ArrowUpRight className="w-4 h-4"/></button></DialogTrigger>
                         <DialogContent className="bg-brand-surface border-brand-border text-foreground">
                           <DialogHeader><DialogTitle>{editingIncomeId ? 'Editar Receita Manual' : 'Lançar Receita Manual'}</DialogTitle></DialogHeader>
                           <form onSubmit={handleInc} className="space-y-4"><input aria-label="Data da receita" type="date" required value={incForm.date} onChange={e=>setIncForm(f=>({...f,date:e.target.value}))} className="w-full bg-brand-bg border border-brand-border rounded p-2" /><input aria-label="Descrição da receita" type="text" required placeholder="Descrição" value={incForm.desc} onChange={e=>setIncForm(f=>({...f,desc:e.target.value}))} className="w-full bg-brand-bg border border-brand-border rounded p-2" /><input aria-label="Valor da receita" type="number" step="0.01" required placeholder="Valor" value={incForm.amount} onChange={e=>setIncForm(f=>({...f,amount:e.target.value}))} className="w-full bg-brand-bg border border-brand-border rounded p-2" /><button type="submit" disabled={isSavingIncome} className="w-full bg-success text-white py-2 rounded font-bold disabled:opacity-60">{isSavingIncome ? 'Salvando...' : editingIncomeId ? 'Salvar alterações' : 'Salvar'}</button></form>
                         </DialogContent>
                       </Dialog>
-                      <Dialog open={expOpen} onOpenChange={open => {
-                        setExpOpen(open);
-                        if (!open) {
-                          setEditingExpenseId(null);
-                           setExpForm({ date: formatDateKey(), desc: '', amount: '', cat: 'Outros', paymentMethod: '' });
-                        }
-                      }}>
+                      <Dialog open={expOpen} onOpenChange={setExpOpen}>
                         <DialogTrigger asChild><button aria-label="Lançar despesa" className="w-8 h-8 flex justify-center items-center rounded-lg bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"><ArrowDownRight className="w-4 h-4"/></button></DialogTrigger>
                         <DialogContent className="bg-brand-surface border-brand-border text-foreground">
                           <DialogHeader><DialogTitle>{editingExpenseId ? 'Editar Despesa' : 'Lançar Despesa'}</DialogTitle></DialogHeader>
@@ -1039,15 +1064,15 @@ export default function Financeiro() {
                       ].sort((a, b) => b.date.localeCompare(a.date));
                       if (feed.length === 0) return <p className="text-sm text-muted-foreground text-center py-8">Nenhuma movimentação</p>;
                       return feed.map(item => (
-                        <div data-testid={`finance-movement-${item.id}`} key={`${item.label}-${item.id}`} className={`p-3 bg-brand-bg rounded-lg border border-brand-border flex justify-between items-center group ${recentlyAddedFinanceIds.has(item.animationId) ? 'bm-list-item-enter' : ''}`}>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 flex-wrap">
+                         <div data-testid={`finance-movement-${item.id}`} key={`${item.label}-${item.id}`} className={`flex min-w-0 flex-col gap-2 rounded-lg border border-brand-border bg-brand-bg p-3 group sm:flex-row sm:items-center sm:justify-between ${recentlyAddedFinanceIds.has(item.animationId) ? 'bm-list-item-enter' : ''}`}>
+                           <div className="min-w-0 sm:flex-1">
+                             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                               <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${item.sign === '+' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{item.label}</span>
-                              <p className="text-sm font-medium truncate">{item.description}</p>
+                               <p className="min-w-0 flex-1 truncate text-sm font-medium">{item.description}</p>
                             </div>
                             <p className="text-[10px] text-muted-foreground mt-0.5">{item.date.split('-').reverse().join('/')}</p>
                           </div>
-                          <div className="flex items-center gap-2 ml-2 shrink-0">
+                           <div className="ml-auto flex min-w-0 items-center gap-2 sm:shrink-0">
                             <span className={`font-bold text-sm ${item.sign === '+' ? 'text-success' : 'text-destructive'}`}>{item.sign}{brl(item.amount)}</span>
                              {item.canDelete && item.onEdit && (
                                <button aria-label="Editar lançamento" onClick={item.onEdit} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:bg-brand-border/50 p-1 rounded transition-all"><Pencil className="w-3 h-3"/></button>
