@@ -67,6 +67,24 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
         });
         return;
       }
+      if (path === 'rpc/get_reception_daily_operations') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            attendances: 0,
+            planUses: 0,
+            incomeByMethod: {},
+            incomeTotal: 0,
+            incomeWithoutMethod: 0,
+            expenseByMethod: {},
+            expenseTotal: 0,
+            planReceiptsByMethod: {},
+            planReceiptTotal: 0,
+          }),
+        });
+        return;
+      }
       if (
         path === 'rpc/get_my_plan_usage_earnings' ||
         path === 'rpc/get_my_manual_appointment_commissions'
@@ -131,11 +149,15 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
   for (const [path, description] of [
     ['/agenda', 'Veja os horários do dia e acompanhe o andamento dos atendimentos.'],
     ['/clientes', 'Busque por nome, e-mail ou WhatsApp e consulte o histórico de visitas.'],
-    ['/planos', 'Crie planos, vincule assinantes e acompanhe usos e pagamentos.'],
   ]) {
     await page.evaluate(`window.history.pushState(null, '', '${path}'); window.dispatchEvent(new PopStateEvent('popstate'))`);
     await expect(page.getByText(description, { exact: true })).toBeVisible();
   }
+  await page.evaluate("window.history.pushState(null, '', '/planos'); window.dispatchEvent(new PopStateEvent('popstate'))");
+  await page.getByRole('button', { name: 'Ver explicação de Planos disponíveis', exact: true }).click();
+  await expect(
+    page.getByText('Crie planos, vincule assinantes e acompanhe usos, renovações e pagamentos.', { exact: true }),
+  ).toBeVisible();
 
   await roleSelector.selectOption('barbeiro');
   await expect(page.getByText(/Visualizando como Barbeiro/)).toBeVisible();
@@ -150,9 +172,9 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
   await expect(mobileMenu.getByRole('link', { name: 'Financeiro' })).toBeVisible();
   await page.getByRole('button', { name: 'Fechar menu' }).click();
   await page.evaluate("window.history.pushState(null, '', '/controle'); window.dispatchEvent(new PopStateEvent('popstate'))");
-  await expect(page.getByRole('heading', { name: '1. Cliente' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '2. Plano, serviço e profissional' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '3. Valores, produtos e pagamento' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Cliente' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Plano, serviço e profissional' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Valores, produtos e pagamento' })).toBeVisible();
   await page.evaluate("window.history.pushState(null, '', '/financeiro'); window.dispatchEvent(new PopStateEvent('popstate'))");
   await expect(page.getByRole('heading', { name: 'Ganhos de Barbeiro' })).toBeVisible();
   await expect(page.getByText('Comissão por execução · Barbearia')).toBeVisible();
@@ -219,7 +241,7 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
   await roleSelector.selectOption('');
 
   await roleSelector.selectOption('barbeiro');
-  await page.getByRole('button', { name: 'Sair do sistema' }).first().click();
+  await page.getByTestId('button-logout').click();
   await expect(page).toHaveURL(/\/login/);
   await page.getByLabel('E-mail').fill(user.email);
   await page.getByLabel('Senha').fill('e2e-role-preview');
@@ -229,7 +251,8 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const pageAnimationDuration = await page.locator('.page-fade-in').evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).animationDuration);
-  const buttonTransitionDuration = await page.locator('button').first().evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).transitionDuration);
+  const buttonTransitionDuration = await page.getByTestId('dashboard-quick-attendance')
+    .evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).transitionDuration);
   expect(Number.parseFloat(pageAnimationDuration)).toBeLessThanOrEqual(0.001);
   expect(Number.parseFloat(buttonTransitionDuration)).toBeLessThanOrEqual(0.001);
 
@@ -263,9 +286,9 @@ test('visualizar cargos não altera dados, identidade nem a sessão real', async
   const professionalDialog = page.getByRole('dialog');
   await expect(professionalDialog).toBeVisible();
   expect(Number.parseFloat(await professionalDialog.evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).animationDuration))).toBeLessThanOrEqual(0.001);
-  const dialogName = professionalDialog.locator('input[type="text"]').first();
+  const dialogName = professionalDialog.getByTestId('input-professional-name');
   await dialogName.fill('Profissional temporário E2E');
-  const professionalRole = professionalDialog.locator('select');
+  const professionalRole = professionalDialog.getByTestId('select-professional-role');
   await professionalRole.selectOption('manicure');
   await expect(professionalRole).toHaveValue('manicure');
   expect(await professionalDialog.evaluate(element => element.contains(element.ownerDocument.activeElement))).toBe(true);
