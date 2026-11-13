@@ -8,6 +8,7 @@ import type { UserSession } from '@/auth/types';
 import NoAccess from '@/pages/no-access';
 import { useTheme } from '@/components/theme-provider';
 import { BrandMark } from '@/components/BrandMark';
+import { toast } from 'sonner';
 import {
   BadgeDollarSign,
   CalendarDays,
@@ -24,6 +25,8 @@ import {
   Sun,
   Moon,
   UsersRound,
+  Building2,
+  Plus,
 } from 'lucide-react';
 
 const ICON_MAP: Record<string, React.ElementType> = {
@@ -45,7 +48,7 @@ interface LayoutProps {
 
 export function Layout({ children }: LayoutProps) {
   const [location, setLocation] = useLocation();
-  const { profile, viewAsProfile, setViewAsProfile, signOut } = useAuth();
+  const { profile, viewAsProfile, setViewAsProfile, signOut, switchOrganization } = useAuth();
   const store = useStore();
   const { theme, toggleTheme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -145,6 +148,17 @@ export function Layout({ children }: LayoutProps) {
     });
   };
 
+  const handleOrganizationChange = async (organizationId: string) => {
+    if (!organizationId || organizationId === profile.organizationId) return;
+    try {
+      await switchOrganization(organizationId);
+      setMobileMenuOpen(false);
+      toast.success('Salão alterado. Os dados foram atualizados.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível trocar de salão.');
+    }
+  };
+
   const toggleSidebar = () => {
     setSidebarCollapsed((collapsed) => {
       const next = !collapsed;
@@ -181,7 +195,7 @@ export function Layout({ children }: LayoutProps) {
         }`}>
           <Icon className="h-[18px] w-[18px]" strokeWidth={1.8} />
         </span>
-        {!collapsed && <span>{item.label}</span>}
+        {!collapsed && <span className="min-w-0 truncate">{item.label}</span>}
       </Link>
     );
   };
@@ -199,7 +213,7 @@ export function Layout({ children }: LayoutProps) {
         >
           <BrandMark className="h-full w-full" />
         </button>
-        {!collapsed && <span className="font-bold text-lg text-foreground truncate uppercase tracking-wide">{store.config.name || 'Beauty Manager'}</span>}
+        {!collapsed && <span className="min-w-0 truncate font-bold text-lg text-foreground uppercase tracking-wide">{store.config.name || 'Beauty Manager'}</span>}
       </div>
 
       <div className={`flex-1 overflow-y-auto py-6 ${collapsed ? 'px-2' : 'px-4'} space-y-1.5 bg-brand-surface`}>
@@ -230,6 +244,7 @@ export function Layout({ children }: LayoutProps) {
           </div>}
         </div>
         <button 
+          data-testid="button-logout"
           onClick={handleLogout}
           aria-label="Sair do sistema"
           title={collapsed ? 'Sair do sistema' : undefined}
@@ -251,13 +266,13 @@ export function Layout({ children }: LayoutProps) {
 
       {/* Mobile Drawer */}
       {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex">
+        <div className="md:hidden fixed inset-0 z-50 flex overflow-hidden">
           <div
             className="bm-mobile-drawer-backdrop fixed inset-0 bg-black/80 backdrop-blur-sm"
             onClick={() => setMobileMenuOpen(false)}
             aria-hidden="true"
           />
-          <aside className="bm-mobile-drawer-panel relative flex h-full w-[min(88vw,340px)] min-w-0 shrink-0 flex-col overflow-x-hidden border-r border-brand-border bg-brand-surface pt-[env(safe-area-inset-top)] pb-[max(env(safe-area-inset-bottom),0.5rem)] shadow-2xl" role="dialog" aria-modal="true" aria-label="Menu de navegação">
+          <aside className="bm-mobile-drawer-panel relative box-border flex h-full w-[min(88vw,340px)] max-w-full min-w-0 shrink-0 flex-col overflow-x-hidden border-r border-brand-border bg-brand-surface pt-[env(safe-area-inset-top)] pb-[max(env(safe-area-inset-bottom),0.5rem)] shadow-2xl" role="dialog" aria-modal="true" aria-label="Menu de navegação">
             <button 
               onClick={() => setMobileMenuOpen(false)}
               aria-label="Fechar menu"
@@ -286,6 +301,33 @@ export function Layout({ children }: LayoutProps) {
           </div>
           
          <div className="flex shrink-0 items-center gap-1.5 md:gap-3">
+            {!viewAsProfile && profile.organizations.length > 1 && (
+              <div className="flex items-center gap-1.5">
+                <Building2 className="hidden h-4 w-4 text-brand-gold sm:block" aria-hidden="true" />
+                <label className="sr-only" htmlFor="active-organization">Salão ativo</label>
+                <select
+                  id="active-organization"
+                  value={profile.organizationId ?? ''}
+                  onChange={event => void handleOrganizationChange(event.target.value)}
+                  className="max-w-[120px] rounded-lg border border-brand-border bg-brand-surface px-2 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-brand-gold sm:max-w-[190px] md:text-sm"
+                  title="Alternar salão"
+                >
+                  {profile.organizations.map(organization => (
+                    <option key={organization.id} value={organization.id}>{organization.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {!viewAsProfile && (profile.role === 'gestor' || profile.role === 'dev-admin') && (
+              <Link
+                href="/onboarding"
+                aria-label="Adicionar outro salão"
+                title="Adicionar outro salão"
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-brand-border bg-brand-surface text-brand-gold transition-colors hover:border-brand-gold/60 hover:bg-brand-gold/10"
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+              </Link>
+            )}
             {profile.role === 'dev-admin' && (
               <div className="flex items-center gap-2">
                 <label className="sr-only" htmlFor="view-as-role">Visualizar como cargo</label>
