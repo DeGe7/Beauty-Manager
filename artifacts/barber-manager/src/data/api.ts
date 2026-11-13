@@ -902,10 +902,12 @@ export const api = {
       }));
     },
     create: async (input: {
+      organizationId: string;
       applicantName: string;
       email: string;
     }): Promise<OrganizationJoinRequest> => {
       const { data, error } = await client().rpc('request_organization_join', {
+        p_organization_id: input.organizationId,
         p_applicant_name: input.applicantName.trim(),
         p_applicant_email: input.email?.trim().toLowerCase() || null,
         p_applicant_phone: null,
@@ -920,6 +922,14 @@ export const api = {
         );
       }
       return mapOrganizationJoinRequest(data as Row);
+    },
+    publicOrganizationName: async (organizationId: string): Promise<string> => {
+      const { data, error } = await client().rpc('get_public_organization_name', {
+        p_organization_id: organizationId,
+      });
+      if (error) throw new Error(`Não foi possível identificar o salão: ${error.message}`);
+      if (!data) throw new Error('O link não identifica um salão válido.');
+      return String(data);
     },
     candidates: async (): Promise<JoinRequestCandidate[]> => {
       await organizationId();
