@@ -1,14 +1,33 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { ArrowLeft, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { api } from '@/data/api';
 
 export default function SolicitarAcesso() {
+  const organizationId = new URLSearchParams(window.location.search).get('organization') || '';
+  const [organizationName, setOrganizationName] = useState('');
+  const [loadingOrganization, setLoadingOrganization] = useState(Boolean(organizationId));
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!organizationId) return;
+    let active = true;
+    api.joinRequests.publicOrganizationName(organizationId)
+      .then(name => {
+        if (active) setOrganizationName(name);
+      })
+      .catch(loadError => {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'Link de acesso inválido.');
+      })
+      .finally(() => {
+        if (active) setLoadingOrganization(false);
+      });
+    return () => { active = false; };
+  }, [organizationId]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -21,10 +40,15 @@ export default function SolicitarAcesso() {
       setError('Informe seu e-mail.');
       return;
     }
+    if (!organizationId || !organizationName) {
+      setError('Peça ao salão o link próprio para solicitar acesso.');
+      return;
+    }
 
     setSubmitting(true);
     try {
       await api.joinRequests.create({
+        organizationId,
         applicantName: name,
         email,
       });
@@ -61,10 +85,15 @@ export default function SolicitarAcesso() {
           <>
             <h1 className="text-2xl font-bold text-foreground">Solicitar autorização</h1>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Envie seus dados sem criar uma conta. O gestor escolherá o perfil profissional correspondente e, se aprovar,
-              enviará um convite para cadastro.
+              {loadingOrganization
+                ? 'Verificando o salão deste link...'
+                : organizationName
+                  ? <>Pedido para <strong className="text-foreground">{organizationName}</strong>. O gestor escolherá seu perfil e, se aprovar, enviará um convite.</>
+                  : 'Este pedido precisa do link específico do salão. Peça-o ao Gestor/Proprietário.'}
             </p>
+            {error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
 
+            {organizationId && organizationName && (
             <form onSubmit={event => void handleSubmit(event)} className="mt-6 space-y-4">
               <div className="space-y-2">
                 <label htmlFor="join-request-name" className="text-sm font-medium text-foreground">Nome e sobrenome</label>
@@ -95,10 +124,9 @@ export default function SolicitarAcesso() {
                 />
               </div>
 
-              {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || loadingOrganization || !organizationName}
                 className="w-full rounded-lg bg-brand-gold px-4 py-3 font-bold text-brand-bg hover:bg-brand-gold/90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {submitting ? 'Enviando pedido...' : 'Enviar pedido ao gestor'}
@@ -107,6 +135,7 @@ export default function SolicitarAcesso() {
                 O pedido não cria uma conta nem libera acesso aos dados da empresa.
               </p>
             </form>
+            )}
           </>
         )}
       </section>
