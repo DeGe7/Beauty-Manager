@@ -83,12 +83,12 @@ export default function Cadastro() {
       if (needsEmailConfirmation) {
         toast.success(inviteToken
           ? 'Conta criada. Confira seu e-mail para confirmar o cadastro.'
-          : 'Conta criada. Confirme seu e-mail, entre e solicite acesso à equipe para aprovação.');
+          : 'Conta criada. Confirme seu e-mail e depois cadastre seu salão.');
         setLocation(inviteToken ? `/login?convite=${encodeURIComponent(inviteToken)}` : '/login');
       } else {
         if (inviteToken) await acceptInvitation(inviteToken);
         toast.success('Conta criada com sucesso!');
-        setLocation('/dashboard');
+        setLocation(inviteToken ? '/dashboard' : '/onboarding');
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Não foi possível criar a conta.');
@@ -102,25 +102,7 @@ export default function Cadastro() {
     ? `/login?convite=${encodeURIComponent(inviteToken)}`
     : '/login';
 
-  if (!inviteToken) {
-    return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
-        <div className="w-full max-w-md space-y-4 rounded-2xl border border-brand-border bg-brand-surface p-5 text-center shadow-2xl sm:p-8">
-          <BrandMark className="mx-auto h-12 w-12" />
-          <h1 className="text-2xl font-bold text-foreground">Cadastro somente por convite</h1>
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            Para proteger a empresa, a criação de conta exige um convite válido. Profissionais novos podem solicitar autorização sem criar uma conta.
-          </p>
-          <Link href="/solicitar-acesso" className="inline-flex w-full justify-center rounded-lg bg-brand-gold px-5 py-3 text-sm font-bold text-brand-bg">
-            Solicitar autorização
-          </Link>
-          <Link href="/login" className="inline-flex justify-center text-sm text-brand-gold hover:underline">Já tenho uma conta</Link>
-        </div>
-      </div>
-    );
-  }
-
-  if (validatingInvitation) {
+  if (inviteToken && validatingInvitation) {
     return (
       <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg p-5 text-center text-sm text-muted-foreground">
         Validando o convite...
@@ -128,7 +110,7 @@ export default function Cadastro() {
     );
   }
 
-  if (!invitationInfo?.valid || invitationInfo.channel === 'phone') {
+  if (inviteToken && (!invitationInfo?.valid || invitationInfo.channel === 'phone')) {
     const legacyPhoneInvitation = invitationInfo?.channel === 'phone';
     return (
       <div className="flex min-h-[100dvh] items-center justify-center bg-brand-bg px-4 py-8">
@@ -143,8 +125,8 @@ export default function Cadastro() {
           <Link href="/login" className="inline-flex w-full justify-center rounded-lg border border-brand-border px-5 py-3 text-sm font-semibold text-foreground">
             Ir para o login
           </Link>
-          <Link href="/solicitar-acesso" className="inline-flex justify-center text-sm text-brand-gold hover:underline">
-            Solicitar autorização
+          <Link href="/cadastro" className="inline-flex justify-center text-sm text-brand-gold hover:underline">
+            Criar uma nova empresa
           </Link>
         </div>
       </div>
@@ -157,8 +139,8 @@ export default function Cadastro() {
       <div className="w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl shadow-2xl overflow-hidden relative z-10">
         <div className="border-b border-brand-border bg-brand-bg/30 p-5 text-center sm:p-8">
           <BrandMark className="mx-auto mb-5 h-16 w-16" />
-          <h1 className="text-2xl font-bold text-foreground">Criar sua conta</h1>
-          <p className="text-sm text-muted-foreground mt-2">Comece a gerenciar seu estabelecimento</p>
+          <h1 className="text-2xl font-bold text-foreground">{inviteToken ? 'Criar sua conta' : 'Criar conta do salão'}</h1>
+          <p className="text-sm text-muted-foreground mt-2">{inviteToken ? 'Aceite o convite para entrar na equipe' : 'Comece a configurar sua empresa no Beauty Manager'}</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4 p-5 sm:p-6">
           {inviteToken && (
