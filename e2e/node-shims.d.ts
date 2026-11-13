@@ -30,6 +30,20 @@ declare module 'node:crypto' {
   export function randomBytes(size: number): RandomBytes;
 }
 
+declare module 'node:buffer' {
+  export interface Buffer extends Uint8Array {}
+  export const Buffer: {
+    from(value: string, encoding: 'base64'): Buffer;
+  };
+}
+
+declare module 'node:url' {
+  export class URL {
+    constructor(url: string);
+    pathname: string;
+  }
+}
+
 interface Response {
   ok: boolean;
   status: number;
