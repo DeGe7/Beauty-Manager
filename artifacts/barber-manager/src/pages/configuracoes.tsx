@@ -16,6 +16,7 @@ import {
   PROFESSIONAL_SALES_COMMISSION_FIELDS,
   PROFESSIONAL_SERVICE_COMMISSION_RATE,
 } from '@/data/appointment-commissions';
+import { useTemporaryFormState } from '@/data/form-drafts';
 
 const SERVICE_COMMISSION_OPTIONS = [
   { value: 'barbearia', label: 'Barbearia' },
@@ -30,29 +31,44 @@ const normalizeServiceName = (name: string) => name.trim().toLocaleLowerCase('pt
 
 export default function Configuracoes() {
   const [location] = useLocation();
-  const section = location.startsWith('/configuracoes/') ? location.split('/')[2] : '';
+  const section = (location.startsWith('/configuracoes/') ? location.split('/')[2] : '') || 'estabelecimento';
   const showSection = (name: string) => !section || section === name;
   const { config, updateConfig, professionals, updateProfessional, products, updateProduct, addProduct, appointments, plans, isLoading } = useStore();
   const { profile } = useAuth();
-  const [formData, setFormData] = useState({ name: '', address: '', cnpj: '', logo: '' });
-  const [logoPath, setLogoPath] = useState('');
+  const [formData, setFormData, clearFormDataDraft] = useTemporaryFormState(
+    'establishment-settings',
+    'configuracoes',
+    { name: config.name || '', address: config.address || '', cnpj: config.cnpj || '', logo: config.logo || '' },
+  );
+  const [logoPath, setLogoPath, clearLogoPathDraft] = useTemporaryFormState('establishment-logo-path', 'configuracoes', config.logoPath || '');
   const logoInputRef = useRef<HTMLInputElement>(null);
-  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoFile, setLogoFile, clearLogoFileDraft] = useTemporaryFormState('establishment-logo-file', 'configuracoes', null as File | null);
   const [isSaving, setIsSaving] = useState(false);
   const [expandedProfId, setExpandedProfId] = useState<string|null>(null);
-  const [serviceDrafts, setServiceDrafts] = useState<ServiceItem[]>([]);
-  const [roleDrafts, setRoleDrafts] = useState<RoleItem[]>([]);
-  const [newService, setNewService] = useState({ name: '', category: 'Barbearia', price: '', duration: '30', commissionKey: 'barbearia' });
+  const [serviceDrafts, setServiceDrafts, clearServiceCatalogDraft] = useTemporaryFormState(
+    'service-catalog',
+    'configuracoes',
+    [...config.services].sort((a, b) => a.sortOrder - b.sortOrder),
+  );
+  const [roleDrafts, setRoleDrafts, clearRolesDraft] = useTemporaryFormState('role-permissions', 'configuracoes', config.roles);
+  const [newService, setNewService, clearNewServiceDraft] = useTemporaryFormState(
+    'service-create',
+    'configuracoes',
+    { name: '', category: 'Barbearia', price: '', duration: '30', commissionKey: 'barbearia' },
+  );
   const [isSavingServices, setIsSavingServices] = useState(false);
-  const [newRole, setNewRole] = useState({ label: '', description: '' });
+  const [newRole, setNewRole, clearNewRoleDraft] = useTemporaryFormState('role-create', 'configuracoes', { label: '', description: '' });
   const [isSavingRoles, setIsSavingRoles] = useState(false);
   const savingRolesRef = useRef(false);
-  const [newPayment, setNewPayment] = useState('');
-  const [adminEmail, setAdminEmail] = useState('');
+  const [newPayment, setNewPayment, clearNewPaymentDraft] = useTemporaryFormState('payment-method-create', 'configuracoes', '');
+  const [adminEmail, setAdminEmail, clearAdminEmailDraft] = useTemporaryFormState('dev-admin-email', 'configuracoes', '');
   const [isProvisioningAdmin, setIsProvisioningAdmin] = useState(false);
   const [provisionedAdmin, setProvisionedAdmin] = useState<ProvisionedDevAdmin | null>(null);
 
+  const previousConfig = useRef(config);
   useEffect(() => {
+    if (previousConfig.current === config) return;
+    previousConfig.current = config;
     setFormData({
       name: config.name || '',
       address: config.address || '',
@@ -112,6 +128,7 @@ export default function Configuracoes() {
     setIsSavingServices(true);
     try {
       if (await updateConfig({ services })) {
+        clearServiceCatalogDraft();
         setServiceDrafts(services);
         toast.success('Catálogo de serviços salvo.');
       }
@@ -185,6 +202,7 @@ export default function Configuracoes() {
     try {
       const saved = await updateConfig({ roles });
       if (!saved) return false;
+      clearRolesDraft();
       setRoleDrafts(roles);
       toast.success(successMessage);
       return true;
@@ -211,6 +229,7 @@ export default function Configuracoes() {
     }];
     if (await persistRoles(roles, 'Cargo criado e salvo. Permissões disponíveis em Papéis e Acesso.')) {
       setNewRole({ label: '', description: '' });
+      clearNewRoleDraft();
     }
   };
   const saveRoles = async () => {
@@ -244,7 +263,7 @@ export default function Configuracoes() {
     if (!key) return;
     if (config.paymentMethods.some(p => p.key === key)) { toast.error('Essa forma já existe'); return; }
     if (await updateConfig({ paymentMethods: [...config.paymentMethods, { key, label: newPayment.trim(), isActive: true }] })) {
-      setNewPayment('');
+      clearNewPaymentDraft();
     }
   };
   const removePayment = async (key: string, label: string) => {
@@ -276,9 +295,11 @@ export default function Configuracoes() {
         nextLogoPath = path;
       }
       if (!await updateConfig({ ...formData, logo, logoPath: nextLogoPath })) return;
+      clearFormDataDraft();
+      clearLogoPathDraft();
+      clearLogoFileDraft();
       setFormData(current => ({ ...current, logo }));
       setLogoPath(nextLogoPath);
-      setLogoFile(null);
       toast.success('Configurações salvas com sucesso.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Não foi possível salvar as configurações.');
@@ -316,7 +337,7 @@ export default function Configuracoes() {
     try {
       const result = await api.admin.provisionDevAdmin(adminEmail, profile.organizationId);
       setProvisionedAdmin(result);
-      setAdminEmail('');
+      clearAdminEmailDraft();
       toast.success(result.membershipCreated ? 'Acesso DEV/ADMIN provisionado.' : 'O acesso já existia; um novo link seguro foi gerado.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Não foi possível provisionar a conta DEV/ADMIN.');
@@ -522,21 +543,23 @@ export default function Configuracoes() {
         
         <div className="space-y-3">
           {activeProfs.map(p => (
-            <div key={p.id} className="border border-brand-border rounded-xl bg-brand-bg overflow-hidden">
+            <div key={p.id} className="min-w-0 border border-brand-border rounded-xl bg-brand-bg overflow-hidden">
               <button
                 type="button"
                 aria-expanded={expandedProfId === p.id}
                 aria-controls={`commissions-${p.id}`}
                 aria-label={`${expandedProfId === p.id ? 'Fechar comissões de' : 'Editar comissões de'} ${p.name}`}
-                className="w-full p-4 flex justify-between items-center hover:bg-brand-border/20 transition-colors text-left"
+                className="flex min-w-0 w-full flex-col items-stretch gap-3 p-4 text-left transition-colors hover:bg-brand-border/20 sm:flex-row sm:items-center sm:justify-between"
                 onClick={() => setExpandedProfId(expandedProfId === p.id ? null : p.id)}
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{backgroundColor: p.color}}>{p.initials}</div>
-                  <span className="font-bold">{p.name}</span>
-                  <span className="text-xs bg-brand-surface border border-brand-border px-2 py-0.5 rounded capitalize text-muted-foreground">{p.role}</span>
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white" style={{backgroundColor: p.color}}>{p.initials}</div>
+                  <div className="min-w-0">
+                    <span className="block break-words font-bold [overflow-wrap:anywhere]">{p.name}</span>
+                    <span className="mt-1 inline-flex max-w-full break-words rounded border border-brand-border bg-brand-surface px-2 py-0.5 text-xs capitalize text-muted-foreground [overflow-wrap:anywhere]">{p.role}</span>
+                  </div>
                 </div>
-                <span className="text-xs text-brand-gold font-medium">{expandedProfId === p.id ? 'Fechar' : 'Editar Comissões'}</span>
+                <span className="shrink-0 self-end text-xs font-medium text-brand-gold sm:self-auto">{expandedProfId === p.id ? 'Fechar' : 'Editar Comissões'}</span>
               </button>
               
               {expandedProfId === p.id && (
@@ -570,15 +593,15 @@ export default function Configuracoes() {
       </div>}
 
       {/* Catálogo de serviços */}
-      {showSection('servicos') && <div id="servicos" className="scroll-mt-24 bg-brand-surface border border-brand-border rounded-2xl p-6 md:p-8 space-y-5 shadow-sm">
-        <div className="flex items-center justify-between gap-3 border-b border-brand-border/50 pb-4">
-          <div>
+      {showSection('servicos') && <div id="servicos" className="scroll-mt-24 min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 md:p-8 space-y-5 shadow-sm">
+        <div className="flex min-w-0 flex-col items-stretch gap-3 border-b border-brand-border/50 pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
             <div className="flex items-center gap-1">
               <h3 className="text-lg font-bold text-foreground">Catálogo de Serviços</h3>
               <FeatureInfo label="Catálogo de serviços">Edite nome, categoria, preço, duração, comissão, ordem e disponibilidade.</FeatureInfo>
             </div>
           </div>
-          <button type="button" onClick={saveServices} disabled={isSavingServices} className="min-h-11 shrink-0 rounded-lg bg-brand-gold px-4 py-2 text-sm font-bold text-brand-bg disabled:cursor-not-allowed disabled:opacity-60">
+          <button type="button" onClick={saveServices} disabled={isSavingServices} className="min-h-11 shrink-0 self-start rounded-lg bg-brand-gold px-4 py-2 text-sm font-bold text-brand-bg disabled:cursor-not-allowed disabled:opacity-60 sm:self-auto">
             {isSavingServices ? 'Salvando...' : 'Salvar catálogo'}
           </button>
         </div>
@@ -670,9 +693,9 @@ export default function Configuracoes() {
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-start gap-2">
           <FeatureInfo label="Regras do catálogo">A comissão usa o percentual do perfil do profissional. Alterações ficam pendentes até “Salvar catálogo”. Serviços vinculados a planos ou atendimentos não podem ser excluídos; desative-os para preservar o histórico.</FeatureInfo>
-          <p className="text-xs text-warning">Serviços vinculados não podem ser excluídos; desative para preservar o histórico.</p>
+          <p className="min-w-0 text-xs text-warning">Serviços vinculados não podem ser excluídos; desative para preservar o histórico.</p>
         </div>
       </div>}
 
@@ -697,14 +720,14 @@ export default function Configuracoes() {
       </div>}
 
       {/* Cargos e pagamentos */}
-      {showSection('cargos-pagamentos') && <div id="cargos-pagamentos" className="scroll-mt-24 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <fieldset disabled={isSavingRoles} className="bg-brand-surface border border-brand-border rounded-2xl p-6 space-y-4 disabled:opacity-70">
-          <div className="flex justify-between items-center"><div><h3 className="text-lg font-bold">Cargos disponíveis</h3><p className="text-xs text-muted-foreground">Desative cargos em uso em vez de apagar o histórico.</p></div><button type="button" onClick={saveRoles} className="text-sm text-brand-gold font-bold">Salvar</button></div>
+      {showSection('cargos-pagamentos') && <div id="cargos-pagamentos" className="scroll-mt-24 grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-2">
+        <fieldset disabled={isSavingRoles} className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 space-y-4 disabled:opacity-70">
+          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><h3 className="text-lg font-bold">Cargos disponíveis</h3><p className="text-xs text-muted-foreground">Desative cargos em uso em vez de apagar o histórico.</p></div><button type="button" onClick={saveRoles} className="text-sm text-brand-gold font-bold">Salvar</button></div>
           {roleDrafts.map((role, index) => <div key={role.id} className="flex items-center gap-2"><input aria-label={`Nome do cargo ${role.key}`} value={role.label} onChange={e => setRoleDrafts(items => items.map((item, i) => i === index ? { ...item, label: e.target.value } : item))} className="min-w-0 flex-1 bg-brand-bg border border-brand-border rounded px-2 py-2 text-sm" /><button type="button" onClick={() => setRoleDrafts(items => items.map((item, i) => i === index ? { ...item, isActive: !item.isActive } : item))} className="text-xs text-brand-gold">{role.isActive ? 'Desativar' : 'Ativar'}</button><button type="button" onClick={() => void removeRole(role)} aria-label={`Excluir cargo ${role.label}`} title="Excluir cargo" className="p-1.5 rounded text-destructive hover:bg-destructive/10"><Trash2 className="w-4 h-4" /></button></div>)}
           <div className="flex gap-2"><input value={newRole.label} onChange={e => setNewRole(r => ({ ...r, label: e.target.value }))} placeholder="Novo cargo" className="min-w-0 flex-1 bg-brand-bg border border-brand-border rounded px-2 py-2 text-sm" /><button type="button" aria-label="Adicionar cargo" onClick={() => void addRole()} className="px-3 rounded bg-brand-gold text-brand-bg"><Plus className="w-4 h-4" /></button></div>
           <p className="text-xs text-muted-foreground" aria-live="polite">{isSavingRoles ? 'Salvando cargos...' : 'Novos cargos são salvos ao adicionar. Para alterar nomes, status ou permissões, use Salvar.'}</p>
         </fieldset>
-        <div className="bg-brand-surface border border-brand-border rounded-2xl p-6 space-y-4">
+        <div className="min-w-0 bg-brand-surface border border-brand-border rounded-2xl p-4 sm:p-6 space-y-4">
           <div className="flex items-center gap-1"><h3 className="text-lg font-bold">Formas de pagamento</h3><FeatureInfo label="Formas de pagamento">A lista aparece no atendimento e aceita divisão entre mais de uma forma de pagamento.</FeatureInfo></div>
           {config.paymentMethods.map(payment => <div key={payment.key} className="flex items-center justify-between bg-brand-bg border border-brand-border rounded px-3 py-2"><span className="text-sm">{payment.label}</span><div className="flex items-center gap-3"><button type="button" onClick={() => updateConfig({ paymentMethods: config.paymentMethods.map(item => item.key === payment.key ? { ...item, isActive: !item.isActive } : item) })} className="text-xs text-brand-gold">{payment.isActive ? 'Desativar' : 'Ativar'}</button><button type="button" onClick={() => removePayment(payment.key, payment.label)} aria-label={`Excluir forma de pagamento ${payment.label}`} title="Excluir forma de pagamento" className="p-1.5 rounded text-destructive hover:bg-destructive/10"><Trash2 className="w-4 h-4" /></button></div></div>)}
           <div className="flex gap-2"><input value={newPayment} onChange={e => setNewPayment(e.target.value)} placeholder="Outra forma" className="min-w-0 flex-1 bg-brand-bg border border-brand-border rounded px-2 py-2 text-sm" /><button type="button" onClick={addPayment} className="px-3 rounded bg-brand-gold text-brand-bg"><Plus className="w-4 h-4" /></button></div>
