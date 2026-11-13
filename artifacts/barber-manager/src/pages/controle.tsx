@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { useStore, brl, productStatus, EXPENSE_CATEGORIES, PAY_LABELS, ExpenseCategory, PayMethod, PaymentSplit, ProfessionalCommissions } from '@/data/store';
+import { useStore, brl, productStatus, EXPENSE_CATEGORIES, PAY_LABELS, ExpenseCategory, PayMethod, PaymentSplit, ProfessionalCommissions, SubscriptionPlan } from '@/data/store';
 import { useAuth } from '@/auth/auth';
 import { FeatureInfo } from '@/components/FeatureInfo';
 import { toast } from 'sonner';
@@ -10,6 +10,7 @@ import { subscriptionReceiptDate } from '@/data/subscription-payment';
 import { canDeleteAttendance } from '@/data/attendance-deletion';
 import { api } from '@/data/api';
 import { normalizeClientPhone } from '@/data/client-phone';
+import { useTemporaryFormState } from '@/data/form-drafts';
 import { isAssignableProfessional } from '@/data/professional-selection';
 import {
   planProfessionalAmountForUse,
@@ -56,8 +57,8 @@ function normalizeClientSearchText(value: string) {
 export default function Controle() {
   const { 
     professionals, products, appointments, expenses, config, plans, subscribers, subscriptionPayments,
-    clients, addClient, updateClient, removeClient, addVisit, removeVisit,
-    addSubscriber, setSubscriptionPaymentStatus,
+    clients, addClient, removeClient, addVisit, removeVisit,
+    addPlan, addSubscriber, setSubscriptionPaymentStatus,
     addAppointment, addExpense, removeAppointment, removeExpense, sellProduct, restock, isLoading
   } = useStore();
   const { profile, viewAsProfile } = useAuth();
@@ -70,34 +71,75 @@ export default function Controle() {
   // Form states
   const [clientLookupField, setClientLookupField] = useState<'name' | 'phone' | null>(null);
   const [activeClientIndex, setActiveClientIndex] = useState(-1);
-  const [selectedClientId, setSelectedClientId] = useState('');
-  const [client, setClient] = useState('');
-  const [clientPhone, setClientPhone] = useState('');
-  const [clientBirthday, setClientBirthday] = useState('');
-  const [anonymousAttendance, setAnonymousAttendance] = useState(false);
-  const [service, setService] = useState('Barbearia');
-  const [serviceDescription, setServiceDescription] = useState('Barbearia');
-  const [serviceId, setServiceId] = useState('');
-  const [planSubscriberId, setPlanSubscriberId] = useState('');
-  const [showAssignPlan, setShowAssignPlan] = useState(false);
-  const [assignPlanId, setAssignPlanId] = useState('');
-  const [confirmPlanPayment, setConfirmPlanPayment] = useState(false);
-  const [assignPlanPaymentMethod, setAssignPlanPaymentMethod] = useState<PayMethod>('pix');
+  const [selectedClientId, setSelectedClientId, clearSelectedClientDraft] = useTemporaryFormState('attendance:selected-client', 'controle', '');
+  const [client, setClient, clearClientDraft] = useTemporaryFormState('attendance:client-name', 'controle', '');
+  const [clientPhone, setClientPhone, clearClientPhoneDraft] = useTemporaryFormState('attendance:client-phone', 'controle', '');
+  const [anonymousAttendance, setAnonymousAttendance, clearAnonymousDraft] = useTemporaryFormState('attendance:anonymous', 'controle', false);
+  const [service, setService, clearServiceDraft] = useTemporaryFormState('attendance:service', 'controle', 'Barbearia');
+  const [serviceDescription, setServiceDescription, clearServiceDescriptionDraft] = useTemporaryFormState('attendance:service-description', 'controle', 'Barbearia');
+  const [serviceId, setServiceId, clearServiceIdDraft] = useTemporaryFormState('attendance:service-id', 'controle', '');
+  const [planSubscriberId, setPlanSubscriberId, clearPlanSubscriberDraft] = useTemporaryFormState('attendance:subscriber', 'controle', '');
+  const [showAssignPlan, setShowAssignPlan, clearAssignPlanOpenDraft] = useTemporaryFormState('attendance:assign-plan-open', 'controle', false);
+  const [showCreatePlan, setShowCreatePlan, clearCreatePlanOpenDraft] = useTemporaryFormState('attendance:create-plan-open', 'controle', false);
+  const [isCreatingPlan, setIsCreatingPlan] = useState(false);
+  const [assignPlanId, setAssignPlanId, clearAssignPlanDraft] = useTemporaryFormState('attendance:assign-plan', 'controle', '');
+  const [confirmPlanPayment, setConfirmPlanPayment, clearPlanPaymentConfirmationDraft] = useTemporaryFormState('attendance:assign-plan-confirm-payment', 'controle', false);
+  const [assignPlanPaymentMethod, setAssignPlanPaymentMethod, clearPlanPaymentMethodDraft] = useTemporaryFormState('attendance:assign-plan-payment-method', 'controle', 'pix' as PayMethod);
+  const [createPlanForm, setCreatePlanForm, clearCreatePlanFormDraft] = useTemporaryFormState(
+    'attendance:create-plan-form',
+    'controle',
+    {
+      name: '',
+      price: '',
+      duration: 'Mensal' as SubscriptionPlan['duration'],
+      salonSharePercent: '',
+      services: [{ serviceId: '', usesPerCycle: '1' }],
+    },
+  );
+  const clearPlanAssignmentDraft = () => {
+    clearAssignPlanOpenDraft();
+    clearAssignPlanDraft();
+    clearPlanPaymentConfirmationDraft();
+    clearPlanPaymentMethodDraft();
+  };
   const [isAssigningPlan, setIsAssigningPlan] = useState(false);
-  const [profId, setProfId] = useState('');
-  const [additionalProfessionalIds, setAdditionalProfessionalIds] = useState<string[]>([]);
-  const [manualCommissionAmounts, setManualCommissionAmounts] = useState<Record<string, string>>({});
-  const [sellerProfessionalId, setSellerProfessionalId] = useState('');
-  const [value, setValue] = useState('');
-  const [tip, setTip] = useState('');
-  const [payMethod, setPayMethod] = useState<PayMethod>('pix');
-  const [notes, setNotes] = useState('');
-  const [apptProducts, setApptProducts] = useState<{
+  const [profId, setProfId, clearProfessionalDraft] = useTemporaryFormState('attendance:professional', 'controle', '');
+  const [additionalProfessionalIds, setAdditionalProfessionalIds, clearAdditionalProfessionalsDraft] = useTemporaryFormState('attendance:additional-professionals', 'controle', [] as string[]);
+  const [manualCommissionAmounts, setManualCommissionAmounts, clearManualCommissionsDraft] = useTemporaryFormState('attendance:commissions', 'controle', {} as Record<string, string>);
+  const [sellerProfessionalId, setSellerProfessionalId, clearSellerDraft] = useTemporaryFormState('attendance:seller', 'controle', '');
+  const [value, setValue, clearValueDraft] = useTemporaryFormState('attendance:value', 'controle', '');
+  const [tip, setTip, clearTipDraft] = useTemporaryFormState('attendance:tip', 'controle', '');
+  const [payMethod, setPayMethod, clearPayMethodDraft] = useTemporaryFormState('attendance:payment-method', 'controle', 'pix' as PayMethod);
+  const [notes, setNotes, clearNotesDraft] = useTemporaryFormState('attendance:notes', 'controle', '');
+  const [apptProducts, setApptProducts, clearAppointmentProductsDraft] = useTemporaryFormState('attendance:products', 'controle', [] as Array<{
     productId: string;
     quantity: number;
     isAutoAssigned?: boolean;
-  }[]>([]);
-  const [paymentSplits, setPaymentSplits] = useState<PaymentSplit[]>([]);
+  }>);
+  const [paymentSplits, setPaymentSplits, clearPaymentSplitsDraft] = useTemporaryFormState('attendance:payments', 'controle', [] as PaymentSplit[]);
+  const clearAttendanceDraft = () => {
+    clearSelectedClientDraft();
+    clearClientDraft();
+    clearClientPhoneDraft();
+    clearAnonymousDraft();
+    clearServiceDraft();
+    clearServiceDescriptionDraft();
+    clearServiceIdDraft();
+    clearPlanSubscriberDraft();
+    clearCreatePlanFormDraft();
+    clearCreatePlanOpenDraft();
+    clearAssignPlanDraft();
+    clearProfessionalDraft();
+    clearAdditionalProfessionalsDraft();
+    clearManualCommissionsDraft();
+    clearSellerDraft();
+    clearValueDraft();
+    clearTipDraft();
+    clearPayMethodDraft();
+    clearNotesDraft();
+    clearAppointmentProductsDraft();
+    clearPaymentSplitsDraft();
+  };
   const pendingAttendanceFocus = useRef<{
     kind: 'product' | 'additional-professional' | 'payment';
     index: number;
@@ -120,10 +162,10 @@ export default function Controle() {
   }, [apptProducts.length, additionalProfessionalIds.length, paymentSplits.length]);
 
   // Expense form
-  const [expDate, setExpDate] = useState(today);
-  const [expDesc, setExpDesc] = useState('');
-  const [expAmount, setExpAmount] = useState('');
-  const [expCategory, setExpCategory] = useState<ExpenseCategory>('Outros');
+  const [expDate, setExpDate, clearExpenseDateDraft] = useTemporaryFormState('daily-expense:date', 'controle', today);
+  const [expDesc, setExpDesc, clearExpenseDescriptionDraft] = useTemporaryFormState('daily-expense:description', 'controle', '');
+  const [expAmount, setExpAmount, clearExpenseAmountDraft] = useTemporaryFormState('daily-expense:amount', 'controle', '');
+  const [expCategory, setExpCategory, clearExpenseCategoryDraft] = useTemporaryFormState('daily-expense:category', 'controle', 'Outros' as ExpenseCategory);
 
   const ownProfile = Boolean(
     session?.professionalId
@@ -319,7 +361,7 @@ export default function Controle() {
     : clientLookupField === 'phone'
       ? clientPhoneQuery.length >= 4
       : false;
-  const matchingClients = canSearchClients
+  const allMatchingClients = canSearchClients
     ? clients
         .filter(item =>
           clientLookupField === 'name'
@@ -327,14 +369,20 @@ export default function Controle() {
             : normalizeClientPhone(item.whatsapp).includes(clientPhoneQuery),
         )
         .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-        .slice(0, 8)
     : [];
+  const matchingClients = allMatchingClients.slice(0, 8);
+  const clientLookupAnnouncement = !selectedClientId && canSearchClients
+    ? allMatchingClients.length === 0
+      ? 'Nenhum cliente encontrado.'
+      : allMatchingClients.length > 8
+        ? `Mais de 8 clientes encontrados. Exibindo os 8 primeiros.`
+        : `${allMatchingClients.length} ${allMatchingClients.length === 1 ? 'cliente encontrado' : 'clientes encontrados'}.`
+    : '';
 
   const selectClient = (selected: (typeof clients)[number]) => {
     setSelectedClientId(selected.id);
     setClient(selected.name);
     setClientPhone(selected.whatsapp);
-    setClientBirthday(selected.birthday ?? '');
     setPlanSubscriberId('');
     setShowAssignPlan(false);
     setConfirmPlanPayment(false);
@@ -383,7 +431,6 @@ export default function Controle() {
     setConfirmPlanPayment(false);
     setClient('');
     setClientPhone('');
-    setClientBirthday('');
     setClientLookupField(null);
     setActiveClientIndex(-1);
   };
@@ -422,7 +469,7 @@ export default function Controle() {
             <span className="shrink-0 text-xs text-muted-foreground">{item.whatsapp || 'Sem telefone'}</span>
           </button>
         )) : (
-          <p role="status" className="px-4 py-3 text-sm text-muted-foreground">
+          <p className="px-4 py-3 text-sm text-muted-foreground">
             Nenhum cliente encontrado. Continue com os dados informados para cadastrar.
           </p>
         )}
@@ -483,7 +530,6 @@ export default function Controle() {
           name: client.trim(),
           email: '',
           whatsapp: normalizedClientPhone,
-          birthday: clientBirthday || undefined,
           interest: 'barbearia',
         }, undefined, { notifyOnError: false });
         if (!savedClient) return;
@@ -509,9 +555,7 @@ export default function Controle() {
         }
         setValue('0');
         toast.success('Este cliente já tem esse plano ativo; selecionado para o atendimento.');
-        setShowAssignPlan(false);
-        setAssignPlanId('');
-        setConfirmPlanPayment(false);
+      clearPlanAssignmentDraft();
         return;
       }
       const subscriber = existingSubscriber ?? await addSubscriber({
@@ -528,8 +572,7 @@ export default function Controle() {
         toast.success(existingSubscriber
           ? 'A assinatura já está pendente. Confirme o pagamento para liberar os usos.'
           : 'Plano atribuído como pendente. Confirme o pagamento para liberar os usos.');
-        setShowAssignPlan(false);
-        setAssignPlanId('');
+        clearPlanAssignmentDraft();
         return;
       }
 
@@ -544,8 +587,7 @@ export default function Controle() {
       });
       if (!paymentSaved) {
         toast.warning('Plano atribuído, mas o pagamento não foi confirmado. Confirme a mensalidade antes de usar o plano.');
-        setShowAssignPlan(false);
-        setConfirmPlanPayment(false);
+        clearPlanAssignmentDraft();
         return;
       }
 
@@ -560,11 +602,63 @@ export default function Controle() {
       }
       setValue('0');
       toast.success('Plano atribuído e mensalidade confirmada. O uso será descontado ao salvar o atendimento.');
-      setShowAssignPlan(false);
-      setAssignPlanId('');
-      setConfirmPlanPayment(false);
+      clearPlanAssignmentDraft();
     } finally {
       setIsAssigningPlan(false);
+    }
+  };
+
+  const handleCreatePlanForAttendance = async () => {
+    if (isCreatingPlan) return;
+    const price = Number(createPlanForm.price);
+    const salonSharePercent = Number(createPlanForm.salonSharePercent);
+    const validServices = createPlanForm.services.map(item => {
+      const configuredService = config.services.find(serviceOption => serviceOption.id === item.serviceId);
+      return {
+        serviceId: item.serviceId,
+        serviceName: configuredService?.name ?? '',
+        usesPerCycle: Number(item.usesPerCycle),
+      };
+    });
+    if (
+      !createPlanForm.name.trim()
+      || !createPlanForm.price.trim()
+      || !Number.isFinite(price)
+      || price < 0
+      || !createPlanForm.salonSharePercent.trim()
+      || !Number.isFinite(salonSharePercent)
+      || salonSharePercent < 0
+      || salonSharePercent > 100
+      || validServices.length === 0
+      || validServices.some(item => !item.serviceId || !item.serviceName || !Number.isInteger(item.usesPerCycle) || item.usesPerCycle < 1)
+    ) {
+      toast.error('Preencha o nome, valor, divisão e serviços com usos válidos.');
+      return;
+    }
+    if (new Set(validServices.map(item => item.serviceId)).size !== validServices.length) {
+      toast.error('Cada serviço pode ser incluído apenas uma vez no plano.');
+      return;
+    }
+
+    setIsCreatingPlan(true);
+    try {
+      const savedPlan = await addPlan({
+        name: createPlanForm.name.trim(),
+        price,
+        duration: createPlanForm.duration,
+        salonSharePercent: Math.round(salonSharePercent * 100) / 100,
+        services: validServices,
+      });
+      if (!savedPlan) return;
+      setAssignPlanId(savedPlan.id);
+      setConfirmPlanPayment(false);
+      setAssignPlanPaymentMethod(payMethod);
+      setShowCreatePlan(false);
+      setShowAssignPlan(true);
+      clearCreatePlanFormDraft();
+      toast.success('Plano criado. Agora atribua ao cliente.');
+    } finally {
+      setIsCreatingPlan(false);
     }
   };
 
@@ -734,7 +828,6 @@ export default function Controle() {
         name: client.trim(),
         email: '',
         whatsapp: normalizedClientPhone,
-        birthday: clientBirthday || undefined,
         interest: 'barbearia',
       }, {
         date: today,
@@ -812,14 +905,6 @@ export default function Controle() {
           ? 'Atendimento registrado e incluído no histórico do cliente!'
           : 'Atendimento registrado!');
     }
-    const existingClient = !anonymousAttendance ? selectedClient ?? (
-      clientRecord && !clientRecord.wasCreated ? clientRecord : undefined
-    ) : undefined;
-    if (existingClient && clientBirthday && clientBirthday !== existingClient.birthday) {
-      if (!await updateClient(existingClient.id, { birthday: clientBirthday })) {
-        toast.warning('Atendimento registrado, mas não foi possível atualizar a data de nascimento do cliente.');
-      }
-    }
     void api.googleCalendar.syncAppointment(createdAppointment.id).catch((error: unknown) => {
       toast.warning('Atendimento salvo, mas não sincronizado com o Google Agenda.', {
         description: error instanceof Error ? error.message : 'Tente sincronizar novamente pela agenda.',
@@ -829,12 +914,14 @@ export default function Controle() {
     setClientLookupField(null);
     setClient('');
     setClientPhone('');
-    setClientBirthday('');
     setAnonymousAttendance(false);
     setPlanSubscriberId(''); setServiceId('');
     setServiceDescription(serviceItem.name);
     setValue(''); setTip(''); setNotes(''); setApptProducts([]); setPaymentSplits([]); setSellerProfessionalId('');
     setAdditionalProfessionalIds([]); setManualCommissionAmounts({});
+    clearAttendanceDraft();
+    setService(serviceItem.name);
+    setServiceDescription(serviceItem.name);
   };
 
   const handleAddExpense = async (e: React.FormEvent) => {
@@ -850,6 +937,10 @@ export default function Controle() {
     
     toast.success('Despesa registrada!');
     setExpDesc(''); setExpAmount(''); setExpDate(today); setExpCategory('Outros');
+    clearExpenseDateDraft();
+    clearExpenseDescriptionDraft();
+    clearExpenseAmountDraft();
+    clearExpenseCategoryDraft();
   };
 
   // Revenue derived from confirmed appointments (no stale income records)
@@ -1044,9 +1135,12 @@ export default function Controle() {
             <span className="shrink-0 rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-brand-gold">Novo</span>
           </div>
           <form onSubmit={handleRegisterAppt} className="space-y-4 [&_input:not([type=checkbox]):not([type=radio])]:min-h-11 [&_select]:min-h-11">
+            <div role="status" aria-live="polite" aria-atomic="true" className="sr-only" data-testid="attendance-client-search-status">
+              {clientLookupAnnouncement}
+            </div>
             <div className="border-b border-brand-border/70 pb-2">
               <div className="flex items-center gap-1">
-                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">1. Cliente</h4>
+                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">Cliente</h4>
                 <FeatureInfo label="Identificar cliente">Digite nome ou telefone para localizar e vincular um cadastro. Para registrar sem dados do cliente, marque “Registrar sem nome do cliente”; planos não ficam disponíveis nesse modo.</FeatureInfo>
               </div>
             </div>
@@ -1067,7 +1161,6 @@ export default function Controle() {
                     setClientLookupField(null);
                     setClient('');
                     setClientPhone('');
-                    setClientBirthday('');
                   }
                 }}
                 className="mt-0.5 h-4 w-4 shrink-0 accent-brand-gold"
@@ -1138,7 +1231,7 @@ export default function Controle() {
               {renderClientLookupResults('name')}
             </div>
             <div>
-              <label htmlFor="attendance-client-phone" className="text-xs font-semibold text-foreground uppercase tracking-wide">Telefone do Cliente</label>
+              <label htmlFor="attendance-client-phone" className="text-xs font-semibold text-foreground uppercase tracking-wide">Telefone ou E-mail do cliente</label>
               <input
                 id="attendance-client-phone"
                 data-testid="input-attendance-client-phone"
@@ -1160,7 +1253,6 @@ export default function Controle() {
                     ? 'border-amber-500 text-foreground focus:ring-1 focus:ring-amber-500'
                     : 'border-brand-border text-foreground focus:ring-1 focus:ring-brand-gold focus:border-brand-gold'
                 }`}
-                placeholder="(11) 99999-9999"
                 role="combobox"
                 aria-autocomplete="list"
                 aria-haspopup="listbox"
@@ -1193,26 +1285,12 @@ export default function Controle() {
               )}
             </div>
 
-            <div>
-              <div className="flex items-center gap-1">
-                <label htmlFor="attendance-client-birthday" className="text-xs font-semibold text-foreground uppercase tracking-wide">Data de nascimento</label>
-                <FeatureInfo label="Data de nascimento">Campo opcional. Quando informado, fica salvo no cadastro do cliente.</FeatureInfo>
-              </div>
-              <input
-                id="attendance-client-birthday"
-                data-testid="input-attendance-client-birthday"
-                type="date"
-                value={clientBirthday}
-                onChange={e => setClientBirthday(e.target.value)}
-                className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2 mt-1 text-sm text-foreground focus:ring-1 focus:ring-brand-gold focus:border-brand-gold outline-none transition-all"
-              />
-            </div>
               </>
             )}
 
             <div className="border-b border-brand-border/70 pb-2 pt-1">
               <div className="flex items-center gap-1">
-                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">2. Plano, serviço e profissional</h4>
+                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">Plano, serviço e profissional</h4>
                 <FeatureInfo label="Plano, serviço e profissional">Selecione o plano do cliente quando houver, informe a categoria e descrição do serviço e escolha quem realizou o atendimento.</FeatureInfo>
               </div>
             </div>
@@ -1269,23 +1347,192 @@ export default function Controle() {
               {selectedPlanSubscriber && planBenefits.length === 0 && (
                 <p className="mt-1 text-xs text-warning">Este plano ainda precisa de serviços e quantidades configurados para controlar os usos.</p>
               )}
-              {plans.length > 0 && !selectedPlanSubscriber && !anonymousAttendance && (
-                <div className="mt-3">
-                  {!showAssignPlan ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAssignPlanId(plans[0]?.id ?? '');
-                        setConfirmPlanPayment(false);
-                        setAssignPlanPaymentMethod(payMethod);
-                        setShowAssignPlan(true);
-                      }}
-                      className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-gold/40 px-3 py-2 text-sm font-semibold text-brand-gold hover:bg-brand-gold/10"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Atribuir plano neste registro
-                    </button>
-                  ) : (
+              {!selectedPlanSubscriber && !anonymousAttendance && (
+                <div className="mt-3 space-y-3">
+                  {!showAssignPlan && !showCreatePlan && (
+                    <div className="flex flex-wrap gap-2">
+                      {plans.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssignPlanId(plans[0]?.id ?? '');
+                            setConfirmPlanPayment(false);
+                            setAssignPlanPaymentMethod(payMethod);
+                            setShowAssignPlan(true);
+                          }}
+                          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-gold/40 px-3 py-2 text-sm font-semibold text-brand-gold hover:bg-brand-gold/10"
+                        >
+                          <Plus className="h-4 w-4" />
+                          Atribuir plano neste registro
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        data-testid="button-create-plan-in-daily-control"
+                        onClick={() => {
+                          setCreatePlanForm({
+                            name: '',
+                            price: '',
+                            duration: 'Mensal',
+                            salonSharePercent: '',
+                            services: [{ serviceId: '', usesPerCycle: '1' }],
+                          });
+                          setShowCreatePlan(true);
+                        }}
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-brand-surface"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Criar plano e atribuir
+                      </button>
+                    </div>
+                  )}
+
+                  {showCreatePlan && (
+                    <div className="space-y-3 rounded-xl border border-brand-gold/30 bg-brand-bg p-3 sm:p-4">
+                      <div>
+                        <h5 className="text-sm font-semibold text-foreground">Criar plano para este cliente</h5>
+                        <p className="mt-1 text-xs text-muted-foreground">Depois de salvar, você poderá atribuí-lo e confirmar o pagamento.</p>
+                      </div>
+                      <div>
+                        <label htmlFor="daily-plan-name" className="text-xs font-semibold uppercase tracking-wide text-foreground">Nome do plano</label>
+                        <input
+                          id="daily-plan-name"
+                          data-testid="input-daily-plan-name"
+                          value={createPlanForm.name}
+                          onChange={event => setCreatePlanForm(current => ({ ...current, name: event.target.value }))}
+                          className="mt-1 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-foreground"
+                          placeholder="Ex.: Plano mensal"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label htmlFor="daily-plan-price" className="text-xs font-semibold uppercase tracking-wide text-foreground">Valor (R$)</label>
+                          <input
+                            id="daily-plan-price"
+                            data-testid="input-daily-plan-price"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={createPlanForm.price}
+                            onChange={event => setCreatePlanForm(current => ({ ...current, price: event.target.value }))}
+                            className="mt-1 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-foreground"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="daily-plan-duration" className="text-xs font-semibold uppercase tracking-wide text-foreground">Ciclo</label>
+                          <select
+                            id="daily-plan-duration"
+                            value={createPlanForm.duration}
+                            onChange={event => setCreatePlanForm(current => ({ ...current, duration: event.target.value as SubscriptionPlan['duration'] }))}
+                            className="mt-1 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-foreground"
+                          >
+                            <option>Mensal</option>
+                            <option>Trimestral</option>
+                            <option>Semestral</option>
+                            <option>Anual</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="daily-plan-salon-share" className="text-xs font-semibold uppercase tracking-wide text-foreground">Parte do salão (%)</label>
+                        <input
+                          id="daily-plan-salon-share"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={createPlanForm.salonSharePercent}
+                          onChange={event => setCreatePlanForm(current => ({ ...current, salonSharePercent: event.target.value }))}
+                          className="mt-1 w-full rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-foreground"
+                        />
+                      </div>
+                      <div>
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-foreground">Serviços e usos incluídos</p>
+                        {createPlanForm.services.map((includedService, index) => (
+                          <div key={index} className="mb-2 grid grid-cols-[minmax(0,1fr)_6rem_2.75rem] gap-2">
+                            <select
+                              aria-label={`Serviço incluso ${index + 1}`}
+                              data-testid={`select-daily-plan-service-${index}`}
+                              value={includedService.serviceId}
+                              onChange={event => setCreatePlanForm(current => ({
+                                ...current,
+                                services: current.services.map((item, itemIndex) => itemIndex === index
+                                  ? { ...item, serviceId: event.target.value }
+                                  : item),
+                              }))}
+                              className="mt-1 min-w-0 rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-foreground"
+                            >
+                              <option value="">Selecione o serviço</option>
+                              {config.services.map(option => (
+                                <option key={option.id} value={option.id}>{option.name}</option>
+                              ))}
+                            </select>
+                            <input
+                              aria-label={`Usos por ciclo do serviço ${index + 1}`}
+                              data-testid={`input-daily-plan-uses-${index}`}
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={includedService.usesPerCycle}
+                              onChange={event => setCreatePlanForm(current => ({
+                                ...current,
+                                services: current.services.map((item, itemIndex) => itemIndex === index
+                                  ? { ...item, usesPerCycle: event.target.value }
+                                  : item),
+                              }))}
+                              className="mt-1 min-w-0 rounded-lg border border-brand-border bg-brand-surface px-3 py-2 text-sm text-foreground"
+                            />
+                            <button
+                              type="button"
+                              aria-label={`Remover serviço incluso ${index + 1}`}
+                              disabled={createPlanForm.services.length === 1}
+                              onClick={() => setCreatePlanForm(current => ({
+                                ...current,
+                                services: current.services.filter((_, itemIndex) => itemIndex !== index),
+                              }))}
+                              className="mt-1 flex min-h-10 min-w-10 items-center justify-center rounded-lg text-destructive disabled:opacity-40"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setCreatePlanForm(current => ({
+                            ...current,
+                            services: [...current.services, { serviceId: '', usesPerCycle: '1' }],
+                          }))}
+                          className="min-h-10 text-sm font-semibold text-brand-gold"
+                        >
+                          + Adicionar serviço
+                        </button>
+                      </div>
+                      <FeatureInfo label="Divisão do plano">O restante do valor será reservado aos profissionais e dividido pelos usos incluídos.</FeatureInfo>
+                      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            clearCreatePlanFormDraft();
+                            setShowCreatePlan(false);
+                          }}
+                          className="min-h-10 rounded-lg border border-brand-border px-3 py-2 text-sm"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="button-save-daily-plan"
+                          onClick={() => void handleCreatePlanForAttendance()}
+                          disabled={isCreatingPlan}
+                          className="min-h-10 rounded-lg bg-brand-gold px-3 py-2 text-sm font-bold text-brand-bg disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isCreatingPlan ? 'Salvando...' : 'Salvar plano'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {showAssignPlan && plans.length > 0 && (
                     <div className="space-y-3 rounded-xl border border-brand-gold/30 bg-brand-bg p-3 sm:p-4">
                       <div>
                         <label htmlFor="attendance-assign-plan" className="text-xs font-semibold uppercase tracking-wide text-foreground">Plano</label>
@@ -1331,10 +1578,7 @@ export default function Controle() {
                       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                         <button
                           type="button"
-                          onClick={() => {
-                            setShowAssignPlan(false);
-                            setConfirmPlanPayment(false);
-                          }}
+                          onClick={() => clearPlanAssignmentDraft()}
                           className="min-h-10 rounded-lg border border-brand-border px-3 py-2 text-sm"
                         >
                           Cancelar
@@ -1700,7 +1944,7 @@ export default function Controle() {
 
             <div className="border-b border-brand-border/70 pb-2 pt-1">
               <div className="flex items-center gap-1">
-                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">3. Valores, produtos e pagamento</h4>
+                <h4 className="text-xs font-bold uppercase tracking-wide text-brand-gold">Valores, produtos e pagamento</h4>
                 <FeatureInfo label="Valores, produtos e pagamento">Revise o valor do serviço, informe gorjeta, produtos consumidos e forma de pagamento antes de salvar.</FeatureInfo>
               </div>
             </div>
